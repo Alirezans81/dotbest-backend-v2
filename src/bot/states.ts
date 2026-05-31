@@ -1,0 +1,65 @@
+export const HairdresserState = {
+  IDLE: "HD_IDLE",
+  WAIT_CONTACT: "HD_WAIT_CONTACT",
+  WAIT_NAME: "HD_WAIT_NAME",
+  WAIT_FIRST_CATEGORY: "HD_WAIT_FIRST_CATEGORY",
+  WAIT_FIRST_SERVICE_NAME: "HD_WAIT_FIRST_SERVICE_NAME",
+  WAIT_FIRST_SERVICE_DURATION: "HD_WAIT_FIRST_SERVICE_DURATION",
+  WAIT_FIRST_SERVICE_PRICE_MIN: "HD_WAIT_FIRST_SERVICE_PRICE_MIN",
+  WAIT_FIRST_SERVICE_PRICE_MAX: "HD_WAIT_FIRST_SERVICE_PRICE_MAX",
+  ONBOARDING_DONE: "HD_ONBOARDING_DONE",
+  WAIT_NEW_CATEGORY: "HD_WAIT_NEW_CATEGORY",
+  WAIT_NEW_SERVICE_NAME: "HD_WAIT_NEW_SERVICE_NAME",
+  WAIT_NEW_SERVICE_DURATION: "HD_WAIT_NEW_SERVICE_DURATION",
+  WAIT_NEW_SERVICE_PRICE_MIN: "HD_WAIT_NEW_SERVICE_PRICE_MIN",
+  WAIT_NEW_SERVICE_PRICE_MAX: "HD_WAIT_NEW_SERVICE_PRICE_MAX",
+  WAIT_APPROVAL_QUOTE_MIN: "HD_WAIT_APPROVAL_QUOTE_MIN",
+  WAIT_APPROVAL_QUOTE_MAX: "HD_WAIT_APPROVAL_QUOTE_MAX",
+  WAIT_APPROVAL_DEPOSIT: "HD_WAIT_APPROVAL_DEPOSIT",
+  WAIT_REJECTION_REASON: "HD_WAIT_REJECTION_REASON",
+  WAIT_WORKING_DAY: "HD_WAIT_WORKING_DAY",
+  WAIT_WORKING_START: "HD_WAIT_WORKING_START",
+  WAIT_WORKING_END: "HD_WAIT_WORKING_END",
+  WAIT_BLOCK_START: "HD_WAIT_BLOCK_START",
+  WAIT_BLOCK_END: "HD_WAIT_BLOCK_END",
+  WAIT_BLOCK_REASON: "HD_WAIT_BLOCK_REASON",
+} as const;
+
+export const CustomerState = {
+  IDLE: "CUST_IDLE",
+  SELECT_CATEGORY: "CUST_SELECT_CATEGORY",
+  SELECT_SERVICE: "CUST_SELECT_SERVICE",
+  SELECT_DATE: "CUST_SELECT_DATE",
+  SELECT_TIME: "CUST_SELECT_TIME",
+  WAIT_DESCRIPTION: "CUST_WAIT_DESCRIPTION",
+  WAIT_ATTACHMENT: "CUST_WAIT_ATTACHMENT",
+  REVIEW_REQUEST: "CUST_REVIEW_REQUEST",
+  REQUEST_SUBMITTED: "CUST_REQUEST_SUBMITTED",
+  WAIT_PAYMENT: "CUST_WAIT_PAYMENT",
+  WAIT_CANCELLATION_CONFIRM: "CUST_WAIT_CANCELLATION_CONFIRM",
+} as const;
+
+export type HairdresserStateValue = (typeof HairdresserState)[keyof typeof HairdresserState];
+export type CustomerStateValue = (typeof CustomerState)[keyof typeof CustomerState];
+
+export interface HairdresserPayload {
+  draftCategoryTitle?: string;
+  draftServiceTitle?: string;
+  draftDurationMinutes?: number;
+  draftPriceMinToman?: number;
+  draftQuoteMinToman?: number;
+  draftQuoteMaxToman?: number;
+  targetBookingId?: string;
+  targetCategoryId?: string;
+}
+
+export interface CustomerPayload {
+  targetHairdresserId?: string;
+  targetHairdresserSlug?: string;
+  selectedCategoryId?: string;
+  selectedServiceId?: string;
+  selectedDate?: string;
+  selectedStartAt?: string;
+  descriptionText?: string;
+  attachmentIds?: string[];
+}

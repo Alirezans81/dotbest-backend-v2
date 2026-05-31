@@ -1,0 +1,313 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Hairdresser {
+  id                    String              @id @default(cuid())
+  telegramUserId        String?             @unique
+  telegramChatId        String?             @unique
+  baleUserId            String?             @unique
+  baleChatId            String?             @unique
+  fullName              String
+  phoneNumber           String              @unique
+  bookingSlug           String              @unique
+  timezone              String              @default("Asia/Tehran")
+  isOnboardingCompleted Boolean             @default(false)
+  autoApproveBookings   Boolean             @default(false)
+  notificationChannel   NotificationChannel @default(TELEGRAM_ONLY)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  categories    ServiceCategory[]
+  services      Service[]
+  workingHours  WorkingHours[]
+  blockedTimes  BlockedTime[]
+  bookings      Booking[]
+
+  @@index([bookingSlug])
+  @@index([telegramUserId])
+  @@index([baleUserId])
+  @@index([phoneNumber])
+}
+
+model Customer {
+  id                  String              @id @default(cuid())
+  telegramUserId      String?             @unique
+  telegramChatId      String?             @unique
+  baleUserId          String?             @unique
+  baleChatId          String?             @unique
+  fullName            String
+  username            String?
+  phoneNumber         String?             @unique
+  notificationChannel NotificationChannel @default(TELEGRAM_ONLY)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  bookings Booking[]
+
+  @@index([telegramUserId])
+  @@index([baleUserId])
+  @@index([phoneNumber])
+}
+
+model ServiceCategory {
+  id            String   @id @default(cuid())
+  hairdresserId String
+  title         String
+  sortOrder     Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  hairdresser Hairdresser @relation(fields: [hairdresserId], references: [id])
+  services    Service[]
+
+  @@index([hairdresserId])
+}
+
+model Service {
+  id              String   @id @default(cuid())
+  hairdresserId   String
+  categoryId      String
+  title           String
+  durationMinutes Int
+  priceMinToman   Int
+  priceMaxToman   Int
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  hairdresser Hairdresser     @relation(fields: [hairdresserId], references: [id])
+  category    ServiceCategory @relation(fields: [categoryId], references: [id])
+  bookings    Booking[]
+
+  @@index([hairdresserId])
+  @@index([categoryId])
+}
+
+model WorkingHours {
+  id               String   @id @default(cuid())
+  hairdresserId    String
+  dayOfWeek        Int
+  startMinuteOfDay Int
+  endMinuteOfDay   Int
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  hairdresser Hairdresser @relation(fields: [hairdresserId], references: [id])
+
+  @@index([hairdresserId, dayOfWeek])
+}
+
+model BlockedTime {
+  id            String   @id @default(cuid())
+  hairdresserId String
+  startsAt      DateTime
+  endsAt        DateTime
+  reason        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  hairdresser Hairdresser @relation(fields: [hairdresserId], references: [id])
+
+  @@index([hairdresserId, startsAt, endsAt])
+}
+
+model Booking {
+  id                    String        @id @default(cuid())
+  hairdresserId         String
+  customerId            String
+  serviceId             String
+  status                BookingStatus @default(PENDING_REVIEW)
+  requestedStartAt      DateTime
+  requestedEndAt        DateTime
+  customerDescription   String?
+  quotedMinPriceToman   Int?
+  quotedMaxPriceToman   Int?
+  depositAmountToman    Int?
+  cancelPenaltyPercent  Int           @default(50)
+  rejectionReason       String?
+  isAutoApproved        Boolean       @default(false)
+  approvedAt            DateTime?
+  confirmedAt           DateTime?
+  cancelledAt           DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  hairdresser      Hairdresser        @relation(fields: [hairdresserId], references: [id])
+  customer         Customer           @relation(fields: [customerId], references: [id])
+  service          Service            @relation(fields: [serviceId], references: [id])
+  attachments      BookingAttachment[]
+  paymentIntents   PaymentIntent[]
+  notifications    NotificationLog[]
+
+  @@index([hairdresserId, requestedStartAt, status])
+  @@index([customerId])
+}
+
+model BookingAttachment {
+  id                    String                @id @default(cuid())
+  bookingId             String
+  type                  BookingAttachmentType
+  telegramFileId        String
+  telegramFileUniqueId  String
+  caption               String?
+  sortOrder             Int                   @default(0)
+  createdAt             DateTime              @default(now())
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId])
+}
+
+model PaymentIntent {
+  id                 String              @id @default(cuid())
+  bookingId          String
+  status             PaymentIntentStatus @default(INITIATED)
+  provider           String
+  amountToman        Int
+  providerAuthority  String?
+  redirectUrl        String?
+  callbackUrl        String
+  expiresAt          DateTime
+  initiatedAt        DateTime?
+  verifiedAt         DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  booking      Booking              @relation(fields: [bookingId], references: [id])
+  transactions PaymentTransaction[]
+
+  @@index([bookingId])
+}
+
+model PaymentTransaction {
+  id                   String                   @id @default(cuid())
+  paymentIntentId      String
+  transactionType      PaymentTransactionType
+  status               PaymentTransactionStatus
+  providerReferenceId  String?                  @unique
+  providerRawPayload   Json?
+  amountToman          Int
+  createdAt            DateTime                 @default(now())
+
+  paymentIntent PaymentIntent @relation(fields: [paymentIntentId], references: [id])
+
+  @@index([paymentIntentId])
+  @@index([providerReferenceId])
+}
+
+model NotificationLog {
+  id               String             @id @default(cuid())
+  bookingId        String?
+  recipientType    RecipientType
+  recipientChatId  String
+  channel          String             @default("TELEGRAM")
+  templateKey      String
+  idempotencyKey   String             @unique
+  status           NotificationStatus @default(PENDING)
+  scheduledFor     DateTime?
+  sentAt           DateTime?
+  errorMessage     String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  booking Booking? @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId])
+  @@index([idempotencyKey])
+  @@index([status, scheduledFor])
+}
+
+model ConversationSession {
+  id                String               @id @default(cuid())
+  actorType         ConversationActorType
+  platform          String               @default("TELEGRAM")
+  hairdresserId     String?
+  customerId        String?
+  telegramChatId    String               @unique
+  state             String
+  payload           Json                 @default("{}")
+  expiresAt         DateTime
+  lastInteractionAt DateTime             @default(now())
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([telegramChatId])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum BookingStatus {
+  PENDING_REVIEW
+  REJECTED
+  APPROVED_AWAITING_DEPOSIT
+  PAYMENT_PENDING
+  CONFIRMED
+  CANCELLATION_REQUESTED
+  CANCELLED_WITH_PENALTY
+  CANCELLED_WITHOUT_PENALTY
+  COMPLETED
+  NO_SHOW
+}
+
+enum BookingAttachmentType {
+  IMAGE
+  VIDEO
+}
+
+enum PaymentIntentStatus {
+  INITIATED
+  REDIRECTED
+  VERIFY_PENDING
+  VERIFIED
+  FAILED
+  EXPIRED
+  REFUNDED_PARTIAL
+  REFUNDED_FULL
+}
+
+enum PaymentTransactionType {
+  INITIATE_REQUEST
+  INITIATE_RESPONSE
+  VERIFY_REQUEST
+  VERIFY_RESPONSE
+  REFUND_REQUEST
+  REFUND_RESPONSE
+}
+
+enum PaymentTransactionStatus {
+  SUCCESS
+  FAILED
+  IGNORED_DUPLICATE
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED_DUPLICATE
+}
+
+enum RecipientType {
+  HAIRDRESSER
+  CUSTOMER
+}
+
+enum ConversationActorType {
+  HAIRDRESSER
+  CUSTOMER
+}
+
+enum NotificationChannel {
+  TELEGRAM_ONLY
+  BALE_ONLY
+  BOTH
+}
