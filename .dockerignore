@@ -1,0 +1,29 @@
+# Source control
+.git
+.gitignore
+
+# Dependencies (rebuilt inside Docker)
+node_modules
+.pnpm-store
+
+# Build output (rebuilt inside Docker)
+.next
+
+# Environment (injected at runtime via docker-compose)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Docker files themselves (not needed in build context)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Docs and local tooling
+docs/
+*.md
+.vscode/
+.idea/
