@@ -18,6 +18,11 @@
 - `GET /api/payments/callback`
 - `POST /api/payments/verify`
 - `POST /api/jobs/reminders/run`
+- `GET /api/admin/withdrawals`
+- `POST /api/admin/withdrawals`
+- `GET /api/admin/withdrawals/approve`
+- `GET /api/admin/withdrawals/reject`
+- `GET /admin` (صفحه ادمین)
 
 ## File Layout پیشنهادی
 
@@ -28,6 +33,10 @@
 - `app/api/payments/callback/route.ts`
 - `app/api/payments/verify/route.ts`
 - `app/api/jobs/reminders/run/route.ts`
+- `app/api/admin/withdrawals/route.ts`
+- `app/api/admin/withdrawals/approve/route.ts`
+- `app/api/admin/withdrawals/reject/route.ts`
+- `app/admin/page.tsx`
 
 ## GET /api/health
 
@@ -218,6 +227,70 @@ endpoint داخلی یا admin-safe برای verify مجدد یک payment intent
   - side effect جدید ایجاد نشود
   - transaction با `IGNORED_DUPLICATE` ثبت شود یا endpoint آن را no-op کند
 
+## Admin Endpoints
+
+### GET /api/admin/withdrawals
+
+لیست درخواست‌های برداشت با فیلتر status.
+
+**auth:** `?secret=<ADMIN_SECRET>` یا header `x-admin-secret`
+
+**query params:** `?status=PENDING|APPROVED|REJECTED`
+
+---
+
+### POST /api/admin/withdrawals
+
+تایید یا رد یک درخواست برداشت.
+
+**auth:** header `x-admin-secret`
+
+**request body:**
+```json
+{ "requestId": "...", "action": "approve|reject", "adminNote": "..." }
+```
+
+**side effects (approve):**
+- `WithdrawalRequest.status = APPROVED`
+- `WITHDRAWAL_DEBIT` از کیف پول کسر می‌شود
+- نوتیف به آرایشگر یا مشتری ارسال می‌شود
+
+---
+
+### GET /api/admin/withdrawals/approve
+
+تایید سریع یک درخواست برداشت با redirect (برای استفاده از لینک مستقیم در صفحه ادمین).
+
+**query params:** `?id=<requestId>&secret=<ADMIN_SECRET>`
+
+**side effects:** مانند POST approve + redirect به `/admin?tab=APPROVED`
+
+---
+
+### GET /api/admin/withdrawals/reject
+
+رد سریع یک درخواست برداشت با redirect.
+
+**query params:** `?id=<requestId>&secret=<ADMIN_SECRET>`
+
+**side effects:** مانند POST reject + redirect به `/admin?tab=REJECTED`
+
+---
+
+
+### GET /admin
+
+صفحه وب پنل ادمین برای مدیریت درخواست‌های برداشت.
+
+**auth:** `?secret=<ADMIN_SECRET>`
+
+**ویژگی‌ها:**
+- tabs: «⏳ در انتظار» / «✅ تایید شده» / «❌ رد شده»
+- جدول با ستون‌های: نام، نوع، مبلغ، شبا، تاریخ، عملیات
+- دکمه‌های تایید/رد با لینک مستقیم به API
+
+---
+
 ## POST /api/jobs/reminders/run
 
 ### هدف
@@ -303,11 +376,12 @@ endpoint داخلی یا admin-safe برای verify مجدد یک payment intent
 4. `POST /api/payments/initiate` فراخوانی می‌شود
 5. payment intent ساخته می‌شود و booking به `PAYMENT_PENDING` می‌رود
 6. **auto-reject:** رزروهای رقیب روی همان اسلات رد می‌شوند
-7. مشتری به درگاه redirect می‌شود
+7. مشتری به درگاه redirect می‌شود (مبلغ شامل کارمزد درگاه اگر `PAYMENT_GATEWAY_FEE_PERCENT > 0` باشد)
 8. provider به `GET /api/payments/callback` برمی‌گردد
 9. verify انجام می‌شود
 10. در صورت موفقیت booking به `CONFIRMED` می‌رود
-11. نوتیف‌ها بر اساس `notificationChannel` ارسال می‌شوند
+11. **مبلغ بیعانه (`depositAmountToman`) به کیف پول آرایشگر اعتبار می‌گیرد (`DEPOSIT_CREDIT`)**
+12. نوتیف‌ها بر اساس `notificationChannel` ارسال می‌شوند
 
 ## Auto-Approve Flow
 
@@ -353,8 +427,10 @@ endpoint داخلی یا admin-safe برای verify مجدد یک payment intent
 - `PAYMENT_PROVIDER_SECRET`
 - `PAYMENT_PROVIDER_CALLBACK_URL`
 - `PAYMENT_REQUEST_TIMEOUT_MINUTES`
+- `PAYMENT_GATEWAY_FEE_PERCENT` — fallback درصد کارمزد اگر API زرین‌پال در دسترس نباشد؛ پیش‌فرض `0`
 - `BOOKING_SLOT_INTERVAL_MINUTES`
 - `CRON_REMINDER_SECRET`
+- `ADMIN_SECRET` — secret برای احراز هویت پنل ادمین و endpointهای ادمین
 
 ## Acceptance Scenarios
 

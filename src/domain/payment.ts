@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { addMinutes } from "@/lib/time";
 import { getConflictingPendingBookings } from "@/domain/availability";
 import { notifyCustomer } from "@/bot/notify";
+import { creditHairdresserDeposit } from "@/domain/wallet";
 import {
   BookingStatus,
   PaymentIntentStatus,
@@ -11,11 +12,36 @@ import {
 import type { Booking } from "@prisma/client";
 
 const TIMEOUT_MINUTES = parseInt(process.env.PAYMENT_REQUEST_TIMEOUT_MINUTES ?? "30", 10);
+const FEE_PERCENT_FALLBACK = parseFloat(process.env.PAYMENT_GATEWAY_FEE_PERCENT ?? "0");
+
+async function fetchZarinpalFee(depositToman: number): Promise<number> {
+  try {
+    const res = await fetch("https://payment.zarinpal.com/pg/v4/payment/feeCalculation.json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        merchant_id: process.env.PAYMENT_PROVIDER_MERCHANT_ID,
+        amount: depositToman * 10,
+        currency: "IRR",
+      }),
+    });
+    const data = await res.json() as { data?: { code?: number; fee?: number }; errors?: unknown };
+    if (data.data?.code === 100 && typeof data.data.fee === "number") {
+      return Math.ceil(data.data.fee / 10);
+    }
+  } catch {
+    // fall through to fallback
+  }
+  return FEE_PERCENT_FALLBACK > 0 ? Math.ceil(depositToman * FEE_PERCENT_FALLBACK / 100) : 0;
+}
 
 export interface InitiateResult {
   paymentIntentId: string;
   redirectUrl: string;
   expiresAt: Date;
+  depositAmountToman: number;
+  gatewayFeeToman: number;
+  totalAmountToman: number;
 }
 
 export async function initiatePayment(bookingId: string): Promise<InitiateResult> {
@@ -40,17 +66,28 @@ export async function initiatePayment(bookingId: string): Promise<InitiateResult
   });
 
   if (existing?.redirectUrl) {
-    return { paymentIntentId: existing.id, redirectUrl: existing.redirectUrl, expiresAt: existing.expiresAt };
+    const depositAmountToman = booking.depositAmountToman!;
+    const gatewayFeeToman = existing.amountToman - depositAmountToman;
+    return {
+      paymentIntentId: existing.id,
+      redirectUrl: existing.redirectUrl,
+      expiresAt: existing.expiresAt,
+      depositAmountToman,
+      gatewayFeeToman,
+      totalAmountToman: existing.amountToman,
+    };
   }
 
   const callbackUrl = `${process.env.APP_BASE_URL}/api/payments/callback`;
   const expiresAt = addMinutes(new Date(), TIMEOUT_MINUTES);
+  const gatewayFeeToman = await fetchZarinpalFee(booking.depositAmountToman!);
+  const totalToman = booking.depositAmountToman! + gatewayFeeToman;
 
   const intent = await prisma.paymentIntent.create({
     data: {
       bookingId,
       provider: "zarinpal",
-      amountToman: booking.depositAmountToman,
+      amountToman: totalToman,
       callbackUrl,
       expiresAt,
       initiatedAt: new Date(),
@@ -68,7 +105,7 @@ export async function initiatePayment(bookingId: string): Promise<InitiateResult
   });
 
   const result = await callZarinpalRequest(
-    booking.depositAmountToman,
+    totalToman,
     `${callbackUrl}?intentId=${intent.id}`,
     `بیعانه رزرو ${booking.id}`
   );
@@ -79,7 +116,7 @@ export async function initiatePayment(bookingId: string): Promise<InitiateResult
       transactionType: PaymentTransactionType.INITIATE_RESPONSE,
       status: result.success ? PaymentTransactionStatus.SUCCESS : PaymentTransactionStatus.FAILED,
       amountToman: booking.depositAmountToman,
-      providerRawPayload: result.raw,
+      providerRawPayload: result.raw as import("@prisma/client").Prisma.InputJsonValue,
     },
   });
 
@@ -135,7 +172,14 @@ export async function initiatePayment(bookingId: string): Promise<InitiateResult
     );
   }
 
-  return { paymentIntentId: intent.id, redirectUrl, expiresAt };
+  return {
+    paymentIntentId: intent.id,
+    redirectUrl,
+    expiresAt,
+    depositAmountToman: booking.depositAmountToman,
+    gatewayFeeToman,
+    totalAmountToman: totalToman,
+  };
 }
 
 export async function verifyPayment(intentId: string): Promise<{ success: boolean; alreadyVerified?: boolean }> {
@@ -188,7 +232,7 @@ export async function verifyPayment(intentId: string): Promise<{ success: boolea
       status: result.success ? PaymentTransactionStatus.SUCCESS : PaymentTransactionStatus.FAILED,
       amountToman: intent.amountToman,
       providerReferenceId: result.refId ?? undefined,
-      providerRawPayload: result.raw,
+      providerRawPayload: result.raw as import("@prisma/client").Prisma.InputJsonValue,
     },
   });
 
@@ -204,10 +248,14 @@ export async function verifyPayment(intentId: string): Promise<{ success: boolea
     data: { status: BookingStatus.CONFIRMED, confirmedAt: new Date() },
   });
 
-  // Safety net: reject any remaining pending bookings for the same slot.
-  // These should have been rejected at PAYMENT_PENDING stage, but this
-  // handles any race conditions that slipped through.
   await rejectConflictingOnConfirm(confirmedBooking);
+
+  // واریز بیعانه به کیف پول آرایشگر
+  await creditHairdresserDeposit(
+    confirmedBooking.hairdresserId,
+    intent.bookingId,
+    confirmedBooking.depositAmountToman!
+  ).catch((err) => console.error("[wallet] creditHairdresserDeposit failed:", err));
 
   return { success: true };
 }

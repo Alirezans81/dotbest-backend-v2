@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { getOrCreateHairdresserSession, getOrCreateCustomerSession, updateSession } from "./session";
 import { HairdresserState, CustomerState } from "./states";
 import { ConversationActorType } from "@prisma/client";
-import { sendMessage, answerCallbackQuery } from "./telegram/client";
+import { sendMessage, answerCallbackQuery, makeHairdresserReplyMenu } from "./telegram/client";
 import type { BotContext } from "./telegram/client";
 import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery } from "./telegram/types";
 
@@ -15,6 +15,10 @@ import {
   handleHairdresserFirstServiceDuration,
   handleHairdresserFirstServicePriceMin,
   handleHairdresserFirstServicePriceMax,
+  handleOnboardingHoursYes,
+  handleOnboardingHoursSkip,
+  handleOnboardingHoursStart,
+  handleOnboardingHoursEnd,
   makeHairdresserMainMenu,
 } from "./handlers/hairdresser/onboarding";
 
@@ -35,14 +39,18 @@ import {
   handleApprovalDeposit,
   handleBookingRejectCallback,
   handleRejectionReason,
+  handleBookingAttachmentsCallback,
 } from "./handlers/hairdresser/booking-review";
 
 import {
   handleTodayMenu,
+  handleUpcomingMenu,
   handleCustomersMenu,
   handleBookingViewCallback,
   handleSettingsMenu,
   handleAutoApproveToggle,
+  handleAutoApproveDepositCallback,
+  handleAutoApproveDeposit,
   handleNotifMenu,
   handleNotifSet,
   handleHoursEditCallback,
@@ -53,7 +61,24 @@ import {
   handleBlockStart,
   handleBlockEnd,
   handleBlockReason,
+  handleBlockNoReasonCallback,
 } from "./handlers/hairdresser/schedule";
+
+import {
+  handleRejectNoReasonCallback,
+} from "./handlers/hairdresser/booking-review";
+
+import {
+  showHairdresserWallet,
+  showCustomerWallet,
+  startWithdrawalFlow,
+  handleWithdrawalAmount,
+  handleWithdrawalIban,
+  handleWithdrawalName,
+} from "./handlers/shared/wallet";
+
+import { showCustomerBookings } from "./handlers/customer/bookings-list";
+import { makeCustomerReplyMenu } from "./telegram/client";
 
 import {
   handleCustomerDeepLink,
@@ -125,9 +150,19 @@ async function handleHairdresserMessage(
     return;
   }
 
-  if (text === "/menu") {
-    await sendMessage(ctx, chatId, "منوی اصلی:", { reply_markup: makeHairdresserMainMenu() });
-    return;
+  if (text === "/menu" || text === "📅 نوبت‌های امروز" || text === "📆 نوبت‌های آینده" || text === "👥 مشتریان" || text === "➕ سرویس جدید" || text === "⚙️ تنظیمات" || text === "💰 کیف پول") {
+    if (text === "/menu") {
+      await sendMessage(ctx, chatId, "منوی اصلی:", { reply_markup: makeHairdresserReplyMenu() });
+      return;
+    }
+    // reply keyboard menu buttons — create a fake query to reuse callback handlers
+    const fakeQuery = { id: "0", from: msg.from!, message: { chat: msg.chat, message_id: 0, date: 0, from: msg.from } } as Parameters<typeof handleTodayMenu>[1];
+    if (text === "📅 نوبت‌های امروز") { await handleTodayMenu(ctx, fakeQuery, session); return; }
+    if (text === "📆 نوبت‌های آینده") { await handleUpcomingMenu(ctx, fakeQuery, session); return; }
+    if (text === "👥 مشتریان") { await handleCustomersMenu(ctx, fakeQuery, session); return; }
+    if (text === "➕ سرویس جدید") { await handleServiceAddCallback(ctx, fakeQuery, session); return; }
+    if (text === "⚙️ تنظیمات") { await handleSettingsMenu(ctx, fakeQuery, session); return; }
+    if (text === "💰 کیف پول") { await showHairdresserWallet(ctx, fakeQuery, session); return; }
   }
 
   switch (session.state) {
@@ -145,6 +180,10 @@ async function handleHairdresserMessage(
       await handleHairdresserFirstServicePriceMin(ctx, msg, session); break;
     case HairdresserState.WAIT_FIRST_SERVICE_PRICE_MAX:
       await handleHairdresserFirstServicePriceMax(ctx, msg, session); break;
+    case HairdresserState.WAIT_ONBOARDING_HOURS_START:
+      await handleOnboardingHoursStart(ctx, msg, session); break;
+    case HairdresserState.WAIT_ONBOARDING_HOURS_END:
+      await handleOnboardingHoursEnd(ctx, msg, session); break;
     case HairdresserState.WAIT_NEW_CATEGORY:
       await handleNewCategoryName(ctx, msg, session); break;
     case HairdresserState.WAIT_NEW_SERVICE_NAME:
@@ -173,6 +212,14 @@ async function handleHairdresserMessage(
       await handleBlockEnd(ctx, msg, session); break;
     case HairdresserState.WAIT_BLOCK_REASON:
       await handleBlockReason(ctx, msg, session); break;
+    case HairdresserState.WAIT_WITHDRAWAL_AMOUNT:
+      await handleWithdrawalAmount(ctx, msg, session, true); break;
+    case HairdresserState.WAIT_WITHDRAWAL_IBAN:
+      await handleWithdrawalIban(ctx, msg, session, true); break;
+    case HairdresserState.WAIT_WITHDRAWAL_NAME:
+      await handleWithdrawalName(ctx, msg, session, true); break;
+    case HairdresserState.WAIT_AUTO_APPROVE_DEPOSIT:
+      await handleAutoApproveDeposit(ctx, msg, session); break;
     default:
       await sendMessage(ctx, chatId, "برای شروع /start رو بزن یا از منوی زیر استفاده کن:", {
         reply_markup: makeHairdresserMainMenu(),
@@ -186,14 +233,34 @@ async function handleCustomerMessage(
   session: Awaited<ReturnType<typeof getOrCreateCustomerSession>>
 ): Promise<void> {
   const chatId = String(msg.chat.id);
+  const text = msg.text ?? "";
+
+  // منوی پایین مشتری
+  if (text === "📋 رزروهای من") { await showCustomerBookings(ctx, msg, session); return; }
+  if (text === "💰 کیف پول") {
+    const fakeQuery = { id: "0", from: msg.from!, message: { chat: msg.chat, message_id: 0, date: 0, from: msg.from } } as Parameters<typeof showCustomerWallet>[1];
+    await showCustomerWallet(ctx, fakeQuery, session);
+    return;
+  }
 
   switch (session.state) {
     case CustomerState.WAIT_DESCRIPTION:
     case CustomerState.WAIT_ATTACHMENT:
       await handleCustomerDescription(ctx, msg, session);
       break;
+    case CustomerState.WAIT_WITHDRAWAL_AMOUNT:
+      await handleWithdrawalAmount(ctx, msg, session, false);
+      break;
+    case CustomerState.WAIT_WITHDRAWAL_IBAN:
+      await handleWithdrawalIban(ctx, msg, session, false);
+      break;
+    case CustomerState.WAIT_WITHDRAWAL_NAME:
+      await handleWithdrawalName(ctx, msg, session, false);
+      break;
     default:
-      await sendMessage(ctx, chatId, "برای رزرو نوبت از لینک آرایشگرت استفاده کن.");
+      await sendMessage(ctx, chatId, "برای رزرو نوبت از لینک آرایشگرت استفاده کن.", {
+        reply_markup: makeCustomerReplyMenu(),
+      });
   }
 }
 
@@ -238,6 +305,28 @@ async function handleHairdresserCallback(
   resource: string,
   extra: string
 ): Promise<void> {
+  const chatId = String(query.message?.chat.id);
+  if (action === "cancel") {
+    await updateSession(chatId, HairdresserState.IDLE, {});
+    await sendMessage(ctx, chatId, "عملیات لغو شد.", { reply_markup: makeHairdresserReplyMenu() });
+    return;
+  }
+
+  if (action === "onboarding") {
+    // hd:onboarding:hours:yes:0  → parts = ["hd","onboarding","hours","yes","0"]
+    // resource = "hours", extra = "yes:0" or "skip:0"
+    if (resource === "hours") {
+      const [verb, idxStr] = extra.split(":");
+      const iranDayIndex = parseInt(idxStr, 10);
+      if (verb === "yes") {
+        await handleOnboardingHoursYes(ctx, query, session, iranDayIndex);
+      } else if (verb === "skip") {
+        await handleOnboardingHoursSkip(ctx, query, session, iranDayIndex);
+      }
+    }
+    return;
+  }
+
   if (action === "menu") {
     switch (resource) {
       case "today": await handleTodayMenu(ctx, query, session); break;
@@ -250,15 +339,23 @@ async function handleHairdresserCallback(
   } else if (action === "booking") {
     if (resource === "approve") await handleBookingApproveCallback(ctx, query, session, extra);
     else if (resource === "reject") await handleBookingRejectCallback(ctx, query, session, extra);
+    else if (resource === "rejectnoreason") await handleRejectNoReasonCallback(ctx, query, session, extra);
     else if (resource === "view") await handleBookingViewCallback(ctx, query, session, extra);
+    else if (resource === "attachments") await handleBookingAttachmentsCallback(ctx, query, session, extra);
   } else if (action === "hours") {
     if (resource === "edit") await handleHoursEditCallback(ctx, query, session);
     else if (resource === "day") await handleHoursDayCallback(ctx, query, session, parseInt(extra, 10));
   } else if (action === "block") {
     if (resource === "add") await handleBlockAddCallback(ctx, query, session);
+    else if (resource === "noreason") await handleBlockNoReasonCallback(ctx, query, session);
+  } else if (action === "wallet") {
+    if (resource === "show") await showHairdresserWallet(ctx, query, session);
+    else if (resource === "withdraw") await startWithdrawalFlow(ctx, chatId, true);
   } else if (action === "settings") {
-    if (resource === "autoapprove") await handleAutoApproveToggle(ctx, query, session);
-    else if (resource === "notif") {
+    if (resource === "autoapprove") {
+      if (extra === "deposit") await handleAutoApproveDepositCallback(ctx, query, session);
+      else await handleAutoApproveToggle(ctx, query, session);
+    } else if (resource === "notif") {
       if (extra === "menu" || !extra) await handleNotifMenu(ctx, query, session);
       else await handleNotifSet(ctx, query, session, extra);
     }
@@ -274,6 +371,7 @@ async function handleCustomerCallback(
   extra: string,
   rawData: string
 ): Promise<void> {
+  const chatId = String(query.message?.chat.id);
   switch (action) {
     case "start":
       // cust:start:<slug> — from deep link callback (not typical but handled)
@@ -307,6 +405,17 @@ async function handleCustomerCallback(
       if (resource === "request") await handleCustomerCancelRequest(ctx, query, session, extra);
       else if (resource === "confirm") await handleCustomerCancelConfirm(ctx, query, session, extra);
       else if (resource === "abort") await handleCustomerCancelAbort(ctx, query, session);
+      break;
+    case "wallet":
+      if (resource === "show") {
+        const fakeMsg = { chat: query.message!.chat, from: query.from, text: "" } as TelegramMessage;
+        await showCustomerWallet(ctx, query, session);
+      } else if (resource === "withdraw") {
+        await startWithdrawalFlow(ctx, chatId, false);
+      } else if (resource === "cancel") {
+        await updateSession(chatId, CustomerState.IDLE, {});
+        await sendMessage(ctx, chatId, "عملیات لغو شد.", { reply_markup: makeCustomerReplyMenu() });
+      }
       break;
   }
 }

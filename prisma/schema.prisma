@@ -19,6 +19,7 @@ model Hairdresser {
   timezone              String              @default("Asia/Tehran")
   isOnboardingCompleted Boolean             @default(false)
   autoApproveBookings   Boolean             @default(false)
+  autoApproveDeposit    Int?
   notificationChannel   NotificationChannel @default(TELEGRAM_ONLY)
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
@@ -28,6 +29,7 @@ model Hairdresser {
   workingHours  WorkingHours[]
   blockedTimes  BlockedTime[]
   bookings      Booking[]
+  wallet        Wallet?
 
   @@index([bookingSlug])
   @@index([telegramUserId])
@@ -49,6 +51,7 @@ model Customer {
   updatedAt           DateTime            @updatedAt
 
   bookings Booking[]
+  wallet   Wallet?
 
   @@index([telegramUserId])
   @@index([baleUserId])
@@ -141,12 +144,13 @@ model Booking {
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
-  hairdresser      Hairdresser        @relation(fields: [hairdresserId], references: [id])
-  customer         Customer           @relation(fields: [customerId], references: [id])
-  service          Service            @relation(fields: [serviceId], references: [id])
-  attachments      BookingAttachment[]
-  paymentIntents   PaymentIntent[]
-  notifications    NotificationLog[]
+  hairdresser         Hairdresser         @relation(fields: [hairdresserId], references: [id])
+  customer            Customer            @relation(fields: [customerId], references: [id])
+  service             Service             @relation(fields: [serviceId], references: [id])
+  attachments         BookingAttachment[]
+  paymentIntents      PaymentIntent[]
+  notifications       NotificationLog[]
+  walletTransactions  WalletTransaction[]
 
   @@index([hairdresserId, requestedStartAt, status])
   @@index([customerId])
@@ -224,6 +228,58 @@ model NotificationLog {
   @@index([bookingId])
   @@index([idempotencyKey])
   @@index([status, scheduledFor])
+}
+
+model Wallet {
+  id            String        @id @default(cuid())
+  ownerType     WalletOwnerType
+  hairdresserId String?       @unique
+  customerId    String?       @unique
+  balanceToman  Int           @default(0)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  hairdresser  Hairdresser?        @relation(fields: [hairdresserId], references: [id])
+  customer     Customer?           @relation(fields: [customerId], references: [id])
+  transactions WalletTransaction[]
+  withdrawals  WithdrawalRequest[]
+
+  @@index([hairdresserId])
+  @@index([customerId])
+}
+
+model WalletTransaction {
+  id          String                @id @default(cuid())
+  walletId    String
+  type        WalletTransactionType
+  amountToman Int
+  bookingId   String?
+  description String?
+  createdAt   DateTime              @default(now())
+
+  wallet  Wallet   @relation(fields: [walletId], references: [id])
+  booking Booking? @relation(fields: [bookingId], references: [id])
+
+  @@index([walletId])
+  @@index([bookingId])
+}
+
+model WithdrawalRequest {
+  id              String           @id @default(cuid())
+  walletId        String
+  amountToman     Int
+  status          WithdrawalStatus @default(PENDING)
+  iban            String
+  accountHolder   String
+  adminNote       String?
+  requestedAt     DateTime         @default(now())
+  resolvedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
 }
 
 model ConversationSession {
@@ -310,4 +366,23 @@ enum NotificationChannel {
   TELEGRAM_ONLY
   BALE_ONLY
   BOTH
+}
+
+enum WalletOwnerType {
+  HAIRDRESSER
+  CUSTOMER
+}
+
+enum WalletTransactionType {
+  DEPOSIT_CREDIT          // آرایشگر: دریافت بیعانه از پرداخت مشتری
+  REFUND_DEBIT            // آرایشگر: برگشت بیعانه به مشتری (کنسل بدون جریمه)
+  PENALTY_CREDIT          // آرایشگر: نگه‌داشتن ۵۰٪ جریمه کنسلی
+  REFUND_CREDIT           // مشتری: دریافت برگشت پول از کنسلی
+  WITHDRAWAL_DEBIT        // هر دو: برداشت تایید‌شده توسط ادمین
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }

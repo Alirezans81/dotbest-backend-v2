@@ -12,7 +12,7 @@
 ```
 
 **Stack:**
-- **Next.js 15** — App Router, Route Handlers (`app/api/**/route.ts`)
+- **Next.js 16** — App Router, Route Handlers (`app/api/**/route.ts`)
 - **PostgreSQL + Prisma** — data layer
 - **Telegram Bot API** — کانال اصلی (و Bale با همان API)
 - **ZarinPal** — درگاه پرداخت (پشت adapter قابل تعویض)
@@ -94,6 +94,11 @@ curl -X POST "https://tapi.bale.ai/bot<TOKEN>/setWebhook" \
 | `GET` | `/api/payments/callback` | callback درگاه پرداخت |
 | `POST` | `/api/payments/verify` | verify دستی پرداخت |
 | `POST` | `/api/jobs/reminders/run` | اجرای job یادآوری |
+| `GET` | `/api/admin/withdrawals` | لیست درخواست‌های برداشت |
+| `POST` | `/api/admin/withdrawals` | تایید/رد درخواست برداشت |
+| `GET` | `/api/admin/withdrawals/approve` | تایید سریع (redirect) |
+| `GET` | `/api/admin/withdrawals/reject` | رد سریع (redirect) |
+| `GET` | `/admin` | پنل وب ادمین |
 
 ---
 
@@ -106,10 +111,11 @@ prisma/
 src/
   lib/
     prisma.ts            ← Prisma client singleton
-    time.ts              ← توابع timezone (Asia/Tehran)
+    time.ts              ← توابع timezone + تاریخ شمسی (Jalali)
     slug.ts              ← slug و idempotency key
     phone.ts             ← نرمال‌سازی شماره +98
     sync.ts              ← سینک حساب بین تلگرام و بله
+    days.ts              ← نگاشت روزهای هفته ایرانی (شنبه=اول) به JS day
 
   bot/
     states.ts            ← HairdresserState / CustomerState enums
@@ -118,33 +124,45 @@ src/
     notify.ts            ← ارسال نوتیف چندکاناله
 
     telegram/
-      client.ts          ← Bot API client (platform-aware)
+      client.ts          ← Bot API client + reply keyboard menus (persistent)
       types.ts           ← Telegram types
 
     handlers/
       hairdresser/
-        onboarding.ts    ← /start، ثبت شماره، نام، اولین سرویس
+        onboarding.ts    ← /start، ثبت شماره، نام، اولین سرویس، تنظیم ساعت کاری
         services.ts      ← افزودن دسته‌بندی و سرویس
-        booking-review.ts ← تایید/رد رزرو + quote + deposit
-        schedule.ts      ← نوبت‌های امروز، مشتریان، ساعت کاری، تنظیمات
+        booking-review.ts ← تایید/رد رزرو + quote + deposit (0 = بدون بیعانه) + مشاهده فایل‌ها/توضیحات
+        schedule.ts      ← نوبت‌های امروز، نوبت‌های آینده، مشتریان، ساعت کاری، تنظیمات
 
       customer/
         booking.ts       ← جریان کامل رزرو (deep link → submit)
-        payment.ts       ← پرداخت، لغو
+        payment.ts       ← پرداخت، لغو + اعمال wallet transactions
+        bookings-list.ts ← نمایش رزروهای فعال مشتری
+
+      shared/
+        wallet.ts        ← نمایش کیف پول + فلوی برداشت (مشترک بین دو طرف)
 
   domain/
     availability.ts      ← محاسبه اسلات‌های خالی (14 روز)
-    payment.ts           ← initiate + verify + auto-reject
+    payment.ts           ← initiate + verify + auto-reject + کارمزد درگاه
+    wallet.ts            ← کیف پول: واریز بیعانه، کنسلی، برداشت
 
   jobs/
     reminders.ts         ← job یادآوری (24h و 2h)
 
-app/api/
-  health/route.ts
-  telegram/webhook/route.ts
-  bale/webhook/route.ts
-  payments/{initiate,callback,verify}/route.ts
-  jobs/reminders/run/route.ts
+app/
+  admin/page.tsx         ← پنل وب ادمین (مدیریت درخواست‌های برداشت)
+
+  api/
+    health/route.ts
+    telegram/webhook/route.ts
+    bale/webhook/route.ts
+    payments/{initiate,callback,verify}/route.ts
+    jobs/reminders/run/route.ts
+    admin/
+      withdrawals/route.ts          ← لیست + تایید/رد (POST)
+      withdrawals/approve/route.ts  ← تایید سریع (GET + redirect)
+      withdrawals/reject/route.ts   ← رد سریع (GET + redirect)
 ```
 
 ---
@@ -157,29 +175,39 @@ app/api/
   ↓ ارسال نام
   ↓ تعریف دسته‌بندی اول
   ↓ تعریف سرویس اول (مدت + قیمت)
+  ↓ تنظیم ساعت کاری (شنبه تا جمعه — هر روز: بله/تعطیل + ساعت)
   ↓ دریافت لینک اختصاصی: t.me/bot?start=hd_<slug>
 
-منوی اصلی:
+منوی اصلی (persistent پایین صفحه):
   📅 نوبت‌های امروز
+  📆 نوبت‌های آینده   ← رزروهای تاییدشده/در انتظار از فردا به بعد، گروه‌بندی‌شده بر اساس تاریخ
   👥 مشتریان
   ➕ سرویس جدید
   ⚙️ تنظیمات
      ├─ ساعت کاری
      ├─ زمان مسدود
      ├─ تایید خودکار: روشن/خاموش
+     ├─ بیعانه خودکار: مبلغ ثابت (فقط وقتی تایید خودکار روشنه)
      └─ کانال نوتیف: تلگرام / بله / هر دو
+  💰 کیف پول
+     ├─ موجودی کل / قفل‌شده / قابل برداشت
+     └─ درخواست برداشت (شبا + نام صاحب حساب)
 ```
 
 ## مسیر مشتری
 
 ```
 deep link → انتخاب دسته‌بندی → انتخاب سرویس
-         → انتخاب تاریخ → انتخاب ساعت
+         → انتخاب تاریخ (شمسی با نام روز: «یکشنبه، ۱۰ خرداد ۱۴۰۵») → انتخاب ساعت
          → توضیح/فایل (اختیاری)
          → ثبت درخواست
          → منتظر تایید آرایشگر
-         → پرداخت بیعانه
+         → پرداخت بیعانه (+ کارمزد درگاه در صورت تنظیم)
          → تأیید نهایی
+
+منوی پایین (persistent):
+  📋 رزروهای من  ← رزروهای فعال + دکمه‌های پرداخت/لغو
+  💰 کیف پول    ← موجودی + درخواست برداشت
 ```
 
 ---
@@ -188,17 +216,18 @@ deep link → انتخاب دسته‌بندی → انتخاب سرویس
 
 ```
 PENDING_REVIEW ──▶ REJECTED
-               ──▶ APPROVED_AWAITING_DEPOSIT
+               ──▶ CONFIRMED ◀─────────────────── تایید دستی با بیعانه 0
+               ──▶ APPROVED_AWAITING_DEPOSIT ◀──── تایید دستی + auto-approve با deposit ثابت
                          │
                          ▼
                    PAYMENT_PENDING ──▶ CONFIRMED ──▶ COMPLETED
-                         │                  │         NO_SHOW
-                         │                  ▼
-                         └──────▶ CANCELLATION_REQUESTED
-                                        │
-                               ┌────────┴────────┐
-                               ▼                 ▼
-                   CANCELLED_WITH_PENALTY  CANCELLED_WITHOUT_PENALTY
+                         │           ▲     │         NO_SHOW
+                         │           │     ▼
+                         │   auto-approve  CANCELLATION_REQUESTED
+                         │   (بدون deposit)      │
+                         │                ┌───────┴───────┐
+                         └──────▶         ▼               ▼
+                         CANCELLED_WITH_PENALTY  CANCELLED_WITHOUT_PENALTY
 ```
 
 **اسلات قفل می‌شه فقط از `PAYMENT_PENDING` به بعد** — چند مشتری می‌توانند قبل از پرداخت همان زمان را درخواست کنند.
@@ -206,6 +235,27 @@ PENDING_REVIEW ──▶ REJECTED
 ---
 
 ## ویژگی‌های کلیدی
+
+### تاریخ شمسی
+
+همه تاریخ‌ها در خروجی بات به **تقویم جلالی (شمسی)** نمایش داده می‌شوند. زمان‌ها در UTC ذخیره و در `Asia/Tehran` تفسیر می‌شوند.
+
+### کیف پول داخلی
+
+هر آرایشگر و مشتری یک کیف پول دارد:
+- بعد از پرداخت موفق، بیعانه به کیف پول **آرایشگر** واریز می‌شود
+- کنسلی با جریمه: ۵۰٪ به مشتری برمی‌گردد، ۵۰٪ در کیف پول آرایشگر می‌ماند
+- کنسلی بدون جریمه: کل بیعانه به کیف پول **مشتری** برمی‌گردد
+- هر دو طرف می‌توانند درخواست برداشت ثبت کنند (تایید ادمین لازم است)
+- **موجودی قفل‌شده آرایشگر:** بیعانه رزروهای `CONFIRMED` که هنوز وقتشان نرسیده قابل برداشت نیست؛ فقط موجودی آزاد (کل منهای قفل‌شده) قابل برداشت است
+
+### پنل ادمین
+
+صفحه `/admin?secret=<ADMIN_SECRET>` برای مدیریت درخواست‌های برداشت — تایید یا رد با یک کلیک.
+
+### کارمزد درگاه پرداخت
+
+قبل از ساخت payment intent، کارمزد از API زرین‌پال (`feeCalculation`) واکشی می‌شود. کارمزد به مبلغ پرداختی اضافه و به مشتری اعلام می‌شود. اگر API در دسترس نبود، fallback به `PAYMENT_GATEWAY_FEE_PERCENT`. مبلغ واریزی به کیف پول آرایشگر همان بیعانه بدون کارمزد است.
 
 ### سینک بین تلگرام و بله
 
@@ -221,7 +271,11 @@ BOTH          → هر دو به صورت موازی
 
 ### تایید خودکار
 
-وقتی `autoApproveBookings = true` روی آرایشگر فعال باشد، رزرو مستقیم وارد `CONFIRMED` می‌شود و نیازی به تایید دستی و پرداخت بیعانه نیست.
+وقتی `autoApproveBookings = true` فعال باشد، دو حالت:
+- **بدون بیعانه ثابت:** رزرو مستقیم `CONFIRMED` می‌شود، هیچ پرداختی نیاز نیست
+- **با بیعانه ثابت (`autoApproveDeposit > 0`):** رزرو `APPROVED_AWAITING_DEPOSIT` می‌شود، مشتری باید مبلغ ثابت را بپردازد تا نوبت نهایی شود؛ `quotedMin/Max` برابر قیمت سرویس است
+
+مبلغ بیعانه ثابت از منوی تنظیمات → «💵 بیعانه خودکار» قابل تنظیم است.
 
 ### Idempotency
 
@@ -248,8 +302,10 @@ BOTH          → هر دو به صورت موازی
 | `PAYMENT_PROVIDER_MERCHANT_ID` | merchant ID زرین‌پال |
 | `PAYMENT_PROVIDER_CALLBACK_URL` | آدرس callback پرداخت |
 | `PAYMENT_REQUEST_TIMEOUT_MINUTES` | TTL payment intent (پیش‌فرض 30) |
+| `PAYMENT_GATEWAY_FEE_PERCENT` | fallback درصد کارمزد اگر API زرین‌پال در دسترس نباشد؛ پیش‌فرض `0` |
 | `CRON_REMINDER_SECRET` | secret header برای job reminders |
 | `BOOKING_SLOT_INTERVAL_MINUTES` | interval اسلات (پیش‌فرض 30) |
+| `ADMIN_SECRET` | secret برای احراز هویت پنل ادمین |
 
 ---
 
@@ -264,12 +320,26 @@ curl -X POST https://your-domain.com/api/jobs/reminders/run \
 
 ---
 
+## ریست دیتابیس (فقط dev)
+
+برای پاک‌سازی کامل دیتابیس در محیط تست:
+
+```bash
+npm run db:reset
+# یا
+pnpm db:reset
+```
+
+این دستور از `prisma migrate reset --force` استفاده می‌کند — دیتابیس drop و recreate شده و همه migrationها اعمال می‌شوند.
+
+---
+
 ## مستندات بیشتر
 
 | فایل | محتوا |
 |------|-------|
-| `docs/01-product-journeys.md` | مسیر کامل آرایشگر و مشتری (شامل auto-approve، رزرو موازی) |
+| `docs/01-product-journeys.md` | مسیر کامل آرایشگر و مشتری (شامل onboarding ساعت کاری، auto-approve، رزرو موازی) |
 | `docs/02-backend-phases.md` | مرحله‌بندی فازهای توسعه |
-| `docs/03-domain-model.md` | مدل داده، state machine، قوانین availability و notification channel |
-| `docs/04-bot-flows-and-states.md` | state‌ها، callback‌های بات و تنظیمات پیشرفته |
+| `docs/03-domain-model.md` | مدل داده، state machine، نگاشت روزهای هفته ایرانی، قوانین availability |
+| `docs/04-bot-flows-and-states.md` | state‌ها، callback‌های بات، تنظیمات پیشرفته، payload‌های onboarding |
 | `docs/05-api-and-integrations.md` | قرارداد API‌ها، Bale integration، multi-channel notifications |

@@ -6,6 +6,7 @@
 
 - کلیدهای اصلی به صورت opaque string و ترجیحاً `cuid()` تولید شوند.
 - همه timestampها در دیتابیس به UTC ذخیره شوند و در لایه نمایش به `Asia/Tehran` تبدیل شوند.
+- همه تاریخ‌ها در خروجی کاربر به **تقویم شمسی (جلالی)** نمایش داده می‌شوند (`src/lib/time.ts`).
 - همه مبالغ به صورت `Int` و با واحد `Toman` ذخیره شوند.
 - هیچ مبلغی با `float` ذخیره نشود.
 - duration سرویس فقط مضرب `30` دقیقه باشد.
@@ -30,6 +31,7 @@
 - `timezone`
 - `isOnboardingCompleted`
 - `autoApproveBookings` — پیش‌فرض `false`
+- `autoApproveDeposit` — nullable؛ اگر مقدار داشته باشد، رزروهای خودکار نیاز به پرداخت این مبلغ دارند
 - `notificationChannel` — پیش‌فرض `TELEGRAM_ONLY`
 - `createdAt`
 - `updatedAt`
@@ -103,7 +105,7 @@
 
 ## WorkingHours
 
-برنامه کاری پایه آرایشگر.
+برنامه کاری پایه آرایشگر. در جریان onboarding تنظیم می‌شود.
 
 ### فیلدهای اصلی
 
@@ -118,9 +120,22 @@
 
 ### قواعد
 
-- `dayOfWeek` بین 0 تا 6
+- `dayOfWeek` از مقادیر JS Date استفاده می‌کند: `0=یکشنبه، 1=دوشنبه، 2=سه‌شنبه، 3=چهارشنبه، 4=پنجشنبه، 5=جمعه، 6=شنبه`
+- **نمایش** به کاربر از شنبه شروع می‌شود (`src/lib/days.ts`)؛ **ذخیره‌سازی** با همان مقادیر JS
 - `startMinuteOfDay < endMinuteOfDay`
 - بازه‌ها نباید برای یک روز overlap داشته باشند
+
+### ترتیب نمایش هفته ایرانی
+
+| ترتیب نمایش | نام | مقدار `dayOfWeek` در DB |
+|---|---|---|
+| 1 | شنبه | 6 |
+| 2 | یکشنبه | 0 |
+| 3 | دوشنبه | 1 |
+| 4 | سه‌شنبه | 2 |
+| 5 | چهارشنبه | 3 |
+| 6 | پنجشنبه | 4 |
+| 7 | جمعه | 5 |
 
 ## BlockedTime
 
@@ -173,7 +188,8 @@
 - `requestedEndAt` از `requestedStartAt + service.duration` مشتق می‌شود
 - `cancelPenaltyPercent` در MVP پیش‌فرض `50` است
 - `depositAmountToman` فقط در رزرو تاییدشده (دستی) مقدار می‌گیرد
-- اگر `isAutoApproved = true`، رزرو بدون بیعانه مستقیم `CONFIRMED` است
+- اگر `isAutoApproved = true` و `autoApproveDeposit = null/0`، رزرو مستقیم `CONFIRMED` است
+- اگر `isAutoApproved = true` و `autoApproveDeposit > 0`، رزرو به `APPROVED_AWAITING_DEPOSIT` می‌رود و مشتری باید بیعانه ثابت بپردازد
 - رزروهای `PENDING_REVIEW` و `APPROVED_AWAITING_DEPOSIT` اسلات را قفل **نمی‌کنند**
 - رزروهای `PAYMENT_PENDING` و `CONFIRMED` اسلات را قفل **می‌کنند**
 
@@ -269,6 +285,72 @@
 - `channel` می‌تواند `TELEGRAM` یا `BALE` باشد
 - `idempotencyKey` برای جلوگیری از ارسال تکراری استفاده می‌شود
 
+## Wallet
+
+کیف پول هر کاربر (آرایشگر یا مشتری) برای نگهداری موجودی و ثبت تراکنش‌ها.
+
+### فیلدهای اصلی
+
+- `id`
+- `ownerType` — `HAIRDRESSER` یا `CUSTOMER`
+- `hairdresserId` — nullable، یکتا
+- `customerId` — nullable، یکتا
+- `balanceToman` — موجودی جاری (Int، پیش‌فرض 0)
+- `createdAt`
+- `updatedAt`
+
+### قواعد
+
+- هر آرایشگر و مشتری حداکثر یک کیف پول دارد (upsert)
+- `balanceToman` نباید منفی شود (بررسی قبل از برداشت)
+- کیف پول هنگام اولین نیاز به‌صورت خودکار ساخته می‌شود (`getOrCreateWallet`)
+
+## WalletTransaction
+
+ثبت تک‌تک تراکنش‌های کیف پول.
+
+### فیلدهای اصلی
+
+- `id`
+- `walletId`
+- `type` — نوع تراکنش (`WalletTransactionType`)
+- `amountToman` — مثبت برای واریز، منفی برای کسر
+- `bookingId` — nullable، مرتبط با رزرو
+- `description`
+- `createdAt`
+
+### قواعد
+
+- هر تراکنش با `balanceToman` روی `Wallet` به‌صورت اتمیک به‌روز می‌شود
+- تراکنش‌ها immutable هستند
+
+## WithdrawalRequest
+
+درخواست برداشت از کیف پول.
+
+### فیلدهای اصلی
+
+- `id`
+- `walletId`
+- `amountToman`
+- `status` — `PENDING`, `APPROVED`, `REJECTED`
+- `iban` — شماره شبا
+- `accountHolder` — نام صاحب حساب
+- `adminNote` — nullable، یادداشت ادمین
+- `requestedAt`
+- `resolvedAt` — nullable
+- `createdAt`
+- `updatedAt`
+
+### قواعد
+
+- درخواست برداشت فقط اگر `balanceToman >= amountToman` باشد پذیرفته می‌شود
+- `amountToman > 0`
+- هر درخواست باید شبا معتبر (`IR` + 24 رقم) داشته باشد
+- بعد از تایید ادمین، موجودی کیف پول با `WITHDRAWAL_DEBIT` کسر می‌شود
+- رد کردن درخواست تأثیری روی موجودی ندارد
+- ادمین می‌تواند یادداشت اضافه کند
+
 ## ConversationSession
 
 state گفت‌وگو در تلگرام یا بله برای هر actor.
@@ -302,15 +384,39 @@ state گفت‌وگو در تلگرام یا بله برای هر actor.
 - `Hairdresser` یک به چند با `WorkingHours`
 - `Hairdresser` یک به چند با `BlockedTime`
 - `Hairdresser` یک به چند با `Booking`
+- `Hairdresser` یک به یک با `Wallet`
 - `Customer` یک به چند با `Booking`
+- `Customer` یک به یک با `Wallet`
 - `ServiceCategory` یک به چند با `Service`
 - `Service` یک به چند با `Booking`
 - `Booking` یک به چند با `BookingAttachment`
 - `Booking` یک به چند با `PaymentIntent`
+- `Booking` یک به چند با `WalletTransaction`
 - `PaymentIntent` یک به چند با `PaymentTransaction`
 - `Booking` یک به چند با `NotificationLog`
+- `Wallet` یک به چند با `WalletTransaction`
+- `Wallet` یک به چند با `WithdrawalRequest`
 
 ## enumها
+
+## WalletOwnerType
+
+- `HAIRDRESSER`
+- `CUSTOMER`
+
+## WalletTransactionType
+
+- `DEPOSIT_CREDIT` — آرایشگر: دریافت بیعانه از پرداخت مشتری
+- `REFUND_DEBIT` — آرایشگر: برگشت بیعانه به مشتری (کنسل بدون جریمه)
+- `PENALTY_CREDIT` — آرایشگر: نگه‌داشتن ۵۰٪ جریمه کنسلی (ثبت اطلاعاتی، موجودی تغییر نمی‌کند)
+- `REFUND_CREDIT` — مشتری: دریافت برگشت پول از کنسلی
+- `WITHDRAWAL_DEBIT` — هر دو: برداشت تایید‌شده توسط ادمین
+
+## WithdrawalStatus
+
+- `PENDING` — در انتظار بررسی ادمین
+- `APPROVED` — تایید و واریز شده
+- `REJECTED` — رد شده
 
 ## BookingStatus
 
@@ -384,7 +490,8 @@ state گفت‌وگو در تلگرام یا بله برای هر actor.
 ### مسیر اصلی (دستی)
 
 - `PENDING_REVIEW -> REJECTED`
-- `PENDING_REVIEW -> APPROVED_AWAITING_DEPOSIT`
+- `PENDING_REVIEW -> CONFIRMED` وقتی آرایشگر بیعانه 0 وارد می‌کند (رزرو فوری نهایی)
+- `PENDING_REVIEW -> APPROVED_AWAITING_DEPOSIT` وقتی بیعانه > 0
 - `APPROVED_AWAITING_DEPOSIT -> PAYMENT_PENDING`
 - `PAYMENT_PENDING -> CONFIRMED`
 - `PAYMENT_PENDING -> APPROVED_AWAITING_DEPOSIT` در صورت expire شدن intent
@@ -432,10 +539,26 @@ state گفت‌وگو در تلگرام یا بله برای هر actor.
 - آرایشگر هنگام تعریف سرویس، بازه قیمت پایه را ذخیره می‌کند
 - آرایشگر هنگام تایید دستی رزرو، quote نهایی همان رزرو را ثبت می‌کند
 - `quotedMinPriceToman <= quotedMaxPriceToman`
-- `depositAmountToman > 0`
-- `depositAmountToman <= quotedMaxPriceToman`
-- payment intent همیشه بر اساس `depositAmountToman` ساخته می‌شود
+- `depositAmountToman >= 0` در تایید دستی؛ اگر 0 باشد رزرو مستقیم `CONFIRMED` می‌شود و PaymentIntent ساخته نمی‌شود
+- `depositAmountToman <= quotedMaxPriceToman` (فقط وقتی > 0)
+- payment intent فقط اگر `depositAmountToman > 0` باشد ساخته می‌شود
+- **کارمزد درگاه پرداخت:**
+  - قبل از ساخت payment intent، کارمزد از API زرین‌پال (`feeCalculation`) واکشی می‌شود
+  - `gatewayFeeToman = ceil(feeRial / 10)` — کارمزد از API به تومان تبدیل می‌شود
+  - اگر API در دسترس نبود، fallback به `PAYMENT_GATEWAY_FEE_PERCENT` درصد
+  - مبلغ نهایی پرداختی: `totalAmountToman = depositAmountToman + gatewayFeeToman`
+  - مبلغ ارسالی به ZarinPal request: `totalToman * 10` (ریال)
+  - اگر fee > 0 باشد، هم مبلغ بیعانه و هم کارمزد به مشتری اعلام می‌شود
+  - مبلغ واریزی به کیف پول آرایشگر همان `depositAmountToman` (بدون کارمزد) است
 - اگر `isAutoApproved = true`، بیعانه‌ای وجود ندارد و `PaymentIntent` ساخته نمی‌شود
+
+## قوانین locked balance (کیف پول آرایشگر)
+
+- بیعانه‌ای که مشتری پرداخت کرده و رزرو هنوز `CONFIRMED` است و زمانش نرسیده، **قفل** محسوب می‌شود
+- `lockedBalance = SUM(depositAmountToman) WHERE status=CONFIRMED AND requestedStartAt > now`
+- `availableBalance = wallet.balanceToman - lockedBalance`
+- آرایشگر فقط می‌تواند `availableBalance` را برداشت کند
+- بعد از گذشتن زمان رزرو (یا کنسل شدن)، مبلغ آزاد می‌شود
 
 ## قوانین cancellation
 
@@ -444,6 +567,14 @@ state گفت‌وگو در تلگرام یا بله برای هر actor.
 - مبلغ قابل عودت در MVP به صورت:
   `refundAmountToman = floor(depositAmountToman / 2)`
 - اگر لغو از سمت آرایشگر باشد، وضعیت `CANCELLED_WITHOUT_PENALTY` ثبت می‌شود
+- **کنسلی با جریمه (wallet transactions):**
+  1. `PENALTY_CREDIT` به مقدار `penaltyToman` (۵۰٪) روی کیف پول آرایشگر ثبت می‌شود (فقط اطلاعاتی)
+  2. `REFUND_DEBIT` به مقدار `-refundToman` از کیف پول آرایشگر کسر می‌شود
+  3. `REFUND_CREDIT` به مقدار `refundToman` به کیف پول مشتری اضافه می‌شود
+- **کنسلی بدون جریمه (wallet transactions):**
+  1. `REFUND_DEBIT` کل بیعانه از کیف پول آرایشگر کسر می‌شود
+  2. `REFUND_CREDIT` کل بیعانه به کیف پول مشتری اضافه می‌شود
+- همه این عملیات‌ها داخل `prisma.$transaction` اتمیک انجام می‌شوند
 
 ## قوانین auto-reject
 

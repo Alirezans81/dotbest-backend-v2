@@ -41,8 +41,8 @@ export async function getAvailableSlots(
   const now = new Date();
   const horizonEnd = addMinutes(now, HORIZON_DAYS * 24 * 60);
 
-  const [workingHours, blockedTimes, blockingBookings] = await Promise.all([
-    prisma.workingHours.findMany({ where: { hairdresserId, isActive: true } }),
+  const [workingHoursRaw, blockedTimes, blockingBookings] = await Promise.all([
+    prisma.workingHours.findMany({ where: { hairdresserId, isActive: true }, orderBy: { updatedAt: "desc" } }),
     prisma.blockedTime.findMany({
       where: { hairdresserId, startsAt: { lte: horizonEnd }, endsAt: { gte: now } },
     }),
@@ -54,6 +54,14 @@ export async function getAvailableSlots(
       },
     }),
   ]);
+
+  // Deduplicate: one entry per dayOfWeek, keep the most recently updated
+  const seenDays = new Set<number>();
+  const workingHours = workingHoursRaw.filter((wh) => {
+    if (seenDays.has(wh.dayOfWeek)) return false;
+    seenDays.add(wh.dayOfWeek);
+    return true;
+  });
 
   const slotsByDate = new Map<string, TimeSlot[]>();
 
@@ -78,8 +86,7 @@ export async function getAvailableSlots(
     if (!wh) { cursor = addMinutes(cursor, SLOT_INTERVAL); continue; }
 
     const slotStartMin = minuteOfDay(slotStart);
-    const slotEndMin = minuteOfDay(slotEnd);
-    if (slotStartMin < wh.startMinuteOfDay || slotEndMin > wh.endMinuteOfDay) {
+    if (slotStartMin < wh.startMinuteOfDay || slotStartMin >= wh.endMinuteOfDay) {
       cursor = addMinutes(cursor, SLOT_INTERVAL); continue;
     }
 
@@ -126,6 +133,8 @@ export async function isSlotAvailable(
   const [workingHours, blockedOverlap, bookingOverlap] = await Promise.all([
     prisma.workingHours.findMany({
       where: { hairdresserId, isActive: true, dayOfWeek: dayOfWeek(startAt) },
+      orderBy: { updatedAt: "desc" },
+      take: 1,
     }),
     prisma.blockedTime.count({
       where: { hairdresserId, startsAt: { lt: endAt }, endsAt: { gt: startAt } },
@@ -143,10 +152,9 @@ export async function isSlotAvailable(
   if (blockedOverlap > 0 || bookingOverlap > 0) return false;
 
   const slotStartMin = minuteOfDay(startAt);
-  const slotEndMin = minuteOfDay(endAt);
 
   return workingHours.some(
-    (wh) => wh.isActive && slotStartMin >= wh.startMinuteOfDay && slotEndMin <= wh.endMinuteOfDay
+    (wh) => wh.isActive && slotStartMin >= wh.startMinuteOfDay && slotStartMin < wh.endMinuteOfDay
   );
 }
 

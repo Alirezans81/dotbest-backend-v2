@@ -78,6 +78,8 @@ export type ReplyKeyboardMarkup = {
   keyboard: Array<Array<{ text: string; request_contact?: boolean }>>;
   resize_keyboard?: boolean;
   one_time_keyboard?: boolean;
+  persistent?: boolean;
+  is_persistent?: boolean;
 };
 
 export type ReplyKeyboardRemove = {

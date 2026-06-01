@@ -3,8 +3,9 @@ import { sendMessage } from "@/bot/telegram/client";
 import { updateSession } from "@/bot/session";
 import { CustomerState } from "@/bot/states";
 import { initiatePayment } from "@/domain/payment";
+import { processPenaltyCancellation, processNopenaltyCancellation } from "@/domain/wallet";
 import { BookingStatus } from "@prisma/client";
-import { formatTehranDateTime } from "@/lib/time";
+import { formatJalaliDateTime } from "@/lib/time";
 import type { BotContext } from "@/bot/telegram/client";
 import type { Session } from "@/bot/session";
 import type { TelegramCallbackQuery } from "@/bot/telegram/types";
@@ -38,7 +39,16 @@ export async function handleCustomerPayCallback(
   try {
     const result = await initiatePayment(bookingId);
     await updateSession(chatId, CustomerState.WAIT_PAYMENT, { activePaymentIntentId: result.paymentIntentId });
-    await sendMessage(ctx, chatId, "برای پرداخت بیعانه روی دکمه زیر بزن:", {
+
+    const feeLines: string[] = [
+      `💳 بیعانه: ${result.depositAmountToman.toLocaleString()} تومان`,
+    ];
+    if (result.gatewayFeeToman > 0) {
+      feeLines.push(`🏦 کارمزد درگاه پرداخت: ${result.gatewayFeeToman.toLocaleString()} تومان`);
+      feeLines.push(`💰 مبلغ قابل پرداخت: ${result.totalAmountToman.toLocaleString()} تومان`);
+    }
+
+    await sendMessage(ctx, chatId, feeLines.join("\n"), {
       reply_markup: {
         inline_keyboard: [[{ text: "💳 پرداخت آنلاین", url: result.redirectUrl }]],
       },
@@ -90,7 +100,7 @@ export async function handleCustomerCancelRequest(
   await sendMessage(
     ctx,
     chatId,
-    `می‌خوای رزرو «${booking.service.title}» در ${formatTehranDateTime(booking.requestedStartAt)} رو لغو کنی؟${penaltyMsg}`,
+    `می‌خوای رزرو «${booking.service.title}» در ${formatJalaliDateTime(booking.requestedStartAt)} رو لغو کنی؟${penaltyMsg}`,
     {
       reply_markup: {
         inline_keyboard: [
@@ -136,17 +146,42 @@ export async function handleCustomerCancelConfirm(
 
   await updateSession(chatId, CustomerState.IDLE, {});
 
-  if (hasPaid) {
-    const refund = Math.floor(booking.depositAmountToman! / 2);
-    await sendMessage(ctx, chatId, `رزروت لغو شد.\n${refund.toLocaleString()} تومان قابل برگشته.`);
+  if (hasPaid && booking.depositAmountToman) {
+    const { refundToman, penaltyToman } = await processPenaltyCancellation(
+      booking.hairdresserId,
+      session.customerId!,
+      bookingId,
+      booking.depositAmountToman
+    ).catch(() => ({ refundToman: Math.floor(booking.depositAmountToman! / 2), penaltyToman: Math.ceil(booking.depositAmountToman! / 2) }));
+
+    await sendMessage(
+      ctx,
+      chatId,
+      `رزروت لغو شد.\n💰 ${refundToman.toLocaleString()} تومان به کیف پولت برگشت.`
+    );
+  } else if (!hasPaid && booking.depositAmountToman) {
+    await processNopenaltyCancellation(
+      booking.hairdresserId,
+      session.customerId!,
+      bookingId,
+      booking.depositAmountToman
+    ).catch(() => {});
+    await sendMessage(ctx, chatId, "رزروت بدون جریمه لغو شد.\n💰 مبلغ بیعانه به کیف پولت برگشت.");
   } else {
     await sendMessage(ctx, chatId, "رزروت بدون جریمه لغو شد.");
   }
 
-  await sendMessage(
-    ctx,
-    booking.hairdresser.telegramChatId,
-    `❌ مشتری رزرو «${booking.service.title}» در ${formatTehranDateTime(booking.requestedStartAt)} رو لغو کرد.`
+  await notifyHairdresserCancellation(ctx, booking);
+}
+
+async function notifyHairdresserCancellation(
+  ctx: BotContext,
+  booking: { hairdresser: { telegramChatId: string | null; baleChatId: string | null; notificationChannel: import("@prisma/client").NotificationChannel }; service: { title: string }; requestedStartAt: Date }
+): Promise<void> {
+  const { notifyHairdresser } = await import("@/bot/notify");
+  await notifyHairdresser(
+    booking.hairdresser,
+    `❌ مشتری رزرو «${booking.service.title}» در ${formatJalaliDateTime(booking.requestedStartAt)} رو لغو کرد.`
   );
 }
 

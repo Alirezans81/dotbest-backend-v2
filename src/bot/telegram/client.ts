@@ -61,6 +61,36 @@ export async function sendMessage(
   });
 }
 
+interface SendMediaOptions {
+  caption?: string;
+}
+
+export async function sendPhoto(
+  ctx: BotContext,
+  chatId: string,
+  photoFileId: string,
+  options: SendMediaOptions = {}
+): Promise<void> {
+  await callBotApi(ctx.platform, "sendPhoto", {
+    chat_id: chatId,
+    photo: photoFileId,
+    ...(options.caption ? { caption: options.caption } : {}),
+  });
+}
+
+export async function sendVideo(
+  ctx: BotContext,
+  chatId: string,
+  videoFileId: string,
+  options: SendMediaOptions = {}
+): Promise<void> {
+  await callBotApi(ctx.platform, "sendVideo", {
+    chat_id: chatId,
+    video: videoFileId,
+    ...(options.caption ? { caption: options.caption } : {}),
+  });
+}
+
 export async function answerCallbackQuery(
   ctx: BotContext,
   callbackQueryId: string,
@@ -104,6 +134,32 @@ export function makeContactKeyboard(): ReplyKeyboardMarkup {
     resize_keyboard: true,
     one_time_keyboard: true,
   };
+}
+
+export function makeHairdresserReplyMenu(): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: "📅 نوبت‌های امروز" }, { text: "📆 نوبت‌های آینده" }],
+      [{ text: "👥 مشتریان" }, { text: "➕ سرویس جدید" }],
+      [{ text: "⚙️ تنظیمات" }, { text: "💰 کیف پول" }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+export function makeCustomerReplyMenu(): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: "📋 رزروهای من" }, { text: "💰 کیف پول" }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+export function makeCancelRow(): Array<{ text: string; callback_data: string }> {
+  return [{ text: "❌ لغو", callback_data: "hd:cancel" }];
 }
 
 export function removeKeyboard(): ReplyKeyboardRemove {

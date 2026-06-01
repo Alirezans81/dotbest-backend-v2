@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { sendMessage, makeInlineKeyboard } from "@/bot/telegram/client";
+import { sendMessage, makeInlineKeyboard, makeHairdresserReplyMenu } from "@/bot/telegram/client";
 import { updateSession, mergeSessionPayload } from "@/bot/session";
 import { HairdresserState } from "@/bot/states";
-import { formatTehranDateTime, TIMEZONE } from "@/lib/time";
+import { formatJalaliDateTime, formatJalaliDate, TIMEZONE } from "@/lib/time";
+import { IRAN_DAYS, iranIndexToJsDay, JS_DAY_NAME } from "@/lib/days";
 import { toZonedTime } from "date-fns-tz";
 import { startOfDay, endOfDay } from "date-fns";
 import { BookingStatus, NotificationChannel } from "@prisma/client";
@@ -32,7 +33,7 @@ export async function handleTodayMenu(
       requestedStartAt: { gte: utcStart, lt: utcEnd },
       status: { in: [BookingStatus.CONFIRMED, BookingStatus.PENDING_REVIEW, BookingStatus.APPROVED_AWAITING_DEPOSIT] },
     },
-    include: { customer: true, service: true },
+    include: { customer: true, service: true, attachments: true },
     orderBy: { requestedStartAt: "asc" },
   });
 
@@ -48,10 +49,74 @@ export async function handleTodayMenu(
       [BookingStatus.PENDING_REVIEW]: "⏳",
       [BookingStatus.APPROVED_AWAITING_DEPOSIT]: "💳",
     }[b.status as string] ?? "•";
-    lines.push(`${statusLabel} ${formatTehranDateTime(b.requestedStartAt)} — ${b.customer.fullName} — ${b.service.title}`);
+    const hasExtra = b.customerDescription || b.attachments.length > 0;
+    lines.push(`${statusLabel} ${formatJalaliDateTime(b.requestedStartAt)} — ${b.customer.fullName} — ${b.service.title}${hasExtra ? " 📎" : ""}`);
   }
 
-  await sendMessage(ctx, chatId, lines.join("\n"));
+  const detailButtons = bookings
+    .filter((b) => b.customerDescription || b.attachments.length > 0)
+    .map((b) => [{ text: `📎 ${b.customer.fullName}`, data: `hd:booking:attachments:${b.id}` }]);
+
+  await sendMessage(ctx, chatId, lines.join("\n"), {
+    reply_markup: detailButtons.length > 0 ? makeInlineKeyboard(detailButtons) : undefined,
+  });
+}
+
+export async function handleUpcomingMenu(
+  ctx: BotContext,
+  query: TelegramCallbackQuery,
+  session: Session
+): Promise<void> {
+  const chatId = String(query.message!.chat.id);
+  const hairdresserId = session.hairdresserId!;
+
+  const todayInTehran = toZonedTime(new Date(), TIMEZONE);
+  const tomorrowStart = startOfDay(new Date(todayInTehran.getTime() + 24 * 60 * 60 * 1000));
+
+  const utcOffset = 3.5 * 60 * 60 * 1000;
+  const utcStart = new Date(tomorrowStart.getTime() - utcOffset);
+
+  const bookings = await prisma.booking.findMany({
+    where: {
+      hairdresserId,
+      requestedStartAt: { gte: utcStart },
+      status: { in: [BookingStatus.CONFIRMED, BookingStatus.PENDING_REVIEW, BookingStatus.APPROVED_AWAITING_DEPOSIT] },
+    },
+    include: { customer: true, service: true, attachments: true },
+    orderBy: { requestedStartAt: "asc" },
+    take: 30,
+  });
+
+  if (bookings.length === 0) {
+    await sendMessage(ctx, chatId, "📆 نوبت آینده‌ای نداری.");
+    return;
+  }
+
+  const lines = [`📆 <b>نوبت‌های آینده (${bookings.length} نوبت):</b>`, ""];
+  let lastDate = "";
+  for (const b of bookings) {
+    const dateLabel = formatJalaliDate(b.requestedStartAt);
+    if (dateLabel !== lastDate) {
+      if (lastDate) lines.push("");
+      lines.push(`📅 <b>${dateLabel}</b>`);
+      lastDate = dateLabel;
+    }
+    const statusLabel = {
+      [BookingStatus.CONFIRMED]: "✅",
+      [BookingStatus.PENDING_REVIEW]: "⏳",
+      [BookingStatus.APPROVED_AWAITING_DEPOSIT]: "💳",
+    }[b.status as string] ?? "•";
+    const hasExtra = b.customerDescription || b.attachments.length > 0;
+    lines.push(`  ${statusLabel} ${formatJalaliDateTime(b.requestedStartAt)} — ${b.customer.fullName} — ${b.service.title}${hasExtra ? " 📎" : ""}`);
+  }
+
+  const detailButtons = bookings
+    .filter((b) => b.customerDescription || b.attachments.length > 0)
+    .map((b) => [{ text: `📎 ${b.customer.fullName}`, data: `hd:booking:attachments:${b.id}` }]);
+
+  await sendMessage(ctx, chatId, lines.join("\n"), {
+    reply_markup: detailButtons.length > 0 ? makeInlineKeyboard(detailButtons) : undefined,
+  });
 }
 
 export async function handleCustomersMenu(
@@ -137,7 +202,7 @@ export async function handleBookingViewCallback(
   };
 
   for (const b of history) {
-    lines.push(`${statusEmoji[b.status] ?? "•"} ${formatTehranDateTime(b.requestedStartAt)} — ${b.service.title}`);
+    lines.push(`${statusEmoji[b.status] ?? "•"} ${formatJalaliDateTime(b.requestedStartAt)} — ${b.service.title}`);
   }
 
   await sendMessage(ctx, chatId, lines.join("\n"));
@@ -153,20 +218,27 @@ export async function handleSettingsMenu(
   if (!hairdresser) return;
 
   const autoLabel = hairdresser.autoApproveBookings ? "✅ تایید خودکار: فعال" : "❌ تایید خودکار: غیرفعال";
+  const depositLabel = hairdresser.autoApproveDeposit
+    ? `💵 بیعانه خودکار: ${hairdresser.autoApproveDeposit.toLocaleString()} تومان`
+    : "💵 بیعانه خودکار: ندارد";
   const notifLabel = {
     [NotificationChannel.TELEGRAM_ONLY]: "📱 نوتیف: فقط تلگرام",
     [NotificationChannel.BALE_ONLY]: "📱 نوتیف: فقط بله",
     [NotificationChannel.BOTH]: "📱 نوتیف: تلگرام + بله",
   }[hairdresser.notificationChannel];
 
-  await sendMessage(ctx, chatId, "⚙️ تنظیمات:", {
-    reply_markup: makeInlineKeyboard([
-      [{ text: "🕐 ساعت کاری", data: "hd:hours:edit" }],
-      [{ text: "🚫 زمان مسدود", data: "hd:block:add" }],
-      [{ text: autoLabel, data: "hd:settings:autoapprove:toggle" }],
-      [{ text: notifLabel, data: "hd:settings:notif:menu" }],
-    ]),
-  });
+  const rows: Array<Array<{ text: string; data: string }>> = [
+    [{ text: "🕐 ساعت کاری", data: "hd:hours:edit" }],
+    [{ text: "🚫 زمان مسدود", data: "hd:block:add" }],
+    [{ text: autoLabel, data: "hd:settings:autoapprove:toggle" }],
+  ];
+  if (hairdresser.autoApproveBookings) {
+    rows.push([{ text: depositLabel, data: "hd:settings:autoapprove:deposit" }]);
+  }
+  rows.push([{ text: notifLabel, data: "hd:settings:notif:menu" }]);
+  rows.push([{ text: "💰 کیف پول", data: "hd:wallet:show" }]);
+
+  await sendMessage(ctx, chatId, "⚙️ تنظیمات:", { reply_markup: makeInlineKeyboard(rows) });
 }
 
 export async function handleAutoApproveToggle(
@@ -189,6 +261,51 @@ export async function handleAutoApproveToggle(
     : "❌ تایید خودکار غیرفعال شد.\n\nاز این به بعد هر رزرو رو باید خودت تایید کنی.";
 
   await sendMessage(ctx, chatId, msg);
+}
+
+export async function handleAutoApproveDepositCallback(
+  ctx: BotContext,
+  query: TelegramCallbackQuery,
+  session: Session
+): Promise<void> {
+  const chatId = String(query.message!.chat.id);
+  await updateSession(chatId, HairdresserState.WAIT_AUTO_APPROVE_DEPOSIT);
+  await sendMessage(
+    ctx,
+    chatId,
+    "مبلغ بیعانه ثابت برای تایید خودکار رو بنویس (تومان):\n\n(برای حذف بیعانه، عدد <b>0</b> وارد کن — رزروهای خودکار بدون پرداخت تایید می‌شن)",
+    { reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]) }
+  );
+}
+
+export async function handleAutoApproveDeposit(
+  ctx: BotContext,
+  msg: TelegramMessage,
+  session: Session
+): Promise<void> {
+  const chatId = String(msg.chat.id);
+  const amount = parseInt(msg.text?.trim().replace(/,/g, "") ?? "", 10);
+
+  if (isNaN(amount) || amount < 0) {
+    await sendMessage(ctx, chatId, "مبلغ باید عدد مثبت یا صفر باشه:", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
+    return;
+  }
+
+  await prisma.hairdresser.update({
+    where: { id: session.hairdresserId! },
+    data: { autoApproveDeposit: amount > 0 ? amount : null },
+  });
+  await updateSession(chatId, HairdresserState.IDLE, {});
+  await sendMessage(
+    ctx,
+    chatId,
+    amount > 0
+      ? `✅ بیعانه ثابت روی <b>${amount.toLocaleString()} تومان</b> تنظیم شد.\nرزروهای خودکار نیاز به پرداخت این مبلغ دارند.`
+      : "✅ بیعانه ثابت حذف شد. رزروهای خودکار بدون پرداخت تایید می‌شن.",
+    { reply_markup: makeHairdresserReplyMenu() }
+  );
 }
 
 export async function handleNotifMenu(
@@ -241,19 +358,18 @@ export async function handleHoursEditCallback(
 ): Promise<void> {
   const chatId = String(query.message!.chat.id);
   const hairdresserId = session.hairdresserId!;
-  const days = ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"];
 
   const workingHours = await prisma.workingHours.findMany({
     where: { hairdresserId, isActive: true },
-    orderBy: { dayOfWeek: "asc" },
   });
 
-  const rows = days.map((dayName, index) => {
-    const wh = workingHours.find((w) => w.dayOfWeek === index);
+  // Display in Iranian week order (شنبه first)
+  const rows = IRAN_DAYS.map(({ name, jsDay }) => {
+    const wh = workingHours.find((w) => w.dayOfWeek === jsDay);
     const label = wh
-      ? `${dayName}: ${minutesToTime(wh.startMinuteOfDay)} - ${minutesToTime(wh.endMinuteOfDay)}`
-      : `${dayName}: تعطیل`;
-    return [{ text: label, data: `hd:hours:day:${index}` }];
+      ? `${name}: ${minutesToTime(wh.startMinuteOfDay)} - ${minutesToTime(wh.endMinuteOfDay)}`
+      : `${name}: تعطیل`;
+    return [{ text: label, data: `hd:hours:day:${jsDay}` }];
   });
 
   await sendMessage(ctx, chatId, "🕐 ساعت کاری:\nبرای ویرایش روز مورد نظر رو انتخاب کن:", {
@@ -265,14 +381,14 @@ export async function handleHoursDayCallback(
   ctx: BotContext,
   query: TelegramCallbackQuery,
   session: Session,
-  dow: number
+  jsDay: number
 ): Promise<void> {
   const chatId = String(query.message!.chat.id);
-  const days = ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"];
-
-  await mergeSessionPayload(chatId, { draftWorkingDay: dow });
+  await mergeSessionPayload(chatId, { draftWorkingDay: jsDay });
   await updateSession(chatId, HairdresserState.WAIT_WORKING_START);
-  await sendMessage(ctx, chatId, `ساعت شروع کار ${days[dow]} رو بنویس (مثلاً 9:00 یا 09:30):`);
+  await sendMessage(ctx, chatId, `ساعت شروع کار <b>${JS_DAY_NAME[jsDay]}</b> رو بنویس (مثلاً 9:00 یا 09:30):`, {
+    reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+  });
 }
 
 export async function handleWorkingStart(
@@ -284,13 +400,17 @@ export async function handleWorkingStart(
   const minutes = parseTimeInput(msg.text?.trim() ?? "");
 
   if (minutes === null) {
-    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 9:00 یا 09:30");
+    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 9:00 یا 09:30", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
     return;
   }
 
   await mergeSessionPayload(chatId, { draftWorkingStart: minutes });
   await updateSession(chatId, HairdresserState.WAIT_WORKING_END);
-  await sendMessage(ctx, chatId, "ساعت پایان کار رو بنویس:");
+  await sendMessage(ctx, chatId, "ساعت پایان کار رو بنویس:", {
+    reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+  });
 }
 
 export async function handleWorkingEnd(
@@ -303,13 +423,17 @@ export async function handleWorkingEnd(
   const endMinutes = parseTimeInput(msg.text?.trim() ?? "");
 
   if (endMinutes === null) {
-    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 18:00");
+    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 18:00", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
     return;
   }
 
   const startMinutes = payload.draftWorkingStart ?? 0;
   if (endMinutes <= startMinutes) {
-    await sendMessage(ctx, chatId, "ساعت پایان باید بعد از ساعت شروع باشه:");
+    await sendMessage(ctx, chatId, "ساعت پایان باید بعد از ساعت شروع باشه:", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
     return;
   }
 
@@ -329,7 +453,7 @@ export async function handleWorkingEnd(
   }
 
   await updateSession(chatId, HairdresserState.IDLE, {});
-  await sendMessage(ctx, chatId, "✅ ساعت کاری ذخیره شد!");
+  await sendMessage(ctx, chatId, "✅ ساعت کاری ذخیره شد!", { reply_markup: makeHairdresserReplyMenu() });
 }
 
 export async function handleBlockAddCallback(
@@ -339,7 +463,9 @@ export async function handleBlockAddCallback(
 ): Promise<void> {
   const chatId = String(query.message!.chat.id);
   await updateSession(chatId, HairdresserState.WAIT_BLOCK_START);
-  await sendMessage(ctx, chatId, "زمان شروع مسدودسازی رو بنویس (مثلاً: 2026-06-01 10:00):");
+  await sendMessage(ctx, chatId, "زمان شروع مسدودسازی رو بنویس (مثلاً: 2026-06-01 10:00):", {
+    reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+  });
 }
 
 export async function handleBlockStart(
@@ -351,13 +477,17 @@ export async function handleBlockStart(
   const dt = parseDateTimeInput(msg.text?.trim() ?? "");
 
   if (!dt) {
-    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 2026-06-01 10:00");
+    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 2026-06-01 10:00", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
     return;
   }
 
   await mergeSessionPayload(chatId, { draftBlockStart: dt.toISOString() });
   await updateSession(chatId, HairdresserState.WAIT_BLOCK_END);
-  await sendMessage(ctx, chatId, "زمان پایان مسدودسازی:");
+  await sendMessage(ctx, chatId, `شروع: ${formatJalaliDateTime(dt)}\n\nزمان پایان مسدودسازی:`, {
+    reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+  });
 }
 
 export async function handleBlockEnd(
@@ -370,19 +500,28 @@ export async function handleBlockEnd(
   const endDt = parseDateTimeInput(msg.text?.trim() ?? "");
 
   if (!endDt) {
-    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 2026-06-01 18:00");
+    await sendMessage(ctx, chatId, "فرمت نادرست. مثلاً: 2026-06-01 18:00", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
     return;
   }
 
   const startDt = new Date(payload.draftBlockStart!);
   if (endDt <= startDt) {
-    await sendMessage(ctx, chatId, "زمان پایان باید بعد از زمان شروع باشه:");
+    await sendMessage(ctx, chatId, "زمان پایان باید بعد از زمان شروع باشه:", {
+      reply_markup: makeInlineKeyboard([[{ text: "❌ لغو", data: "hd:cancel" }]]),
+    });
     return;
   }
 
   await mergeSessionPayload(chatId, { draftBlockEnd: endDt.toISOString() });
   await updateSession(chatId, HairdresserState.WAIT_BLOCK_REASON);
-  await sendMessage(ctx, chatId, "دلیل مسدودسازی (اختیاری) یا «رد» بزن:");
+  await sendMessage(ctx, chatId, "دلیل مسدودسازی رو بنویس (اختیاری):", {
+    reply_markup: makeInlineKeyboard([
+      [{ text: "بدون دلیل", data: "hd:block:noreason" }],
+      [{ text: "❌ لغو", data: "hd:cancel" }],
+    ]),
+  });
 }
 
 export async function handleBlockReason(
@@ -392,20 +531,39 @@ export async function handleBlockReason(
 ): Promise<void> {
   const chatId = String(msg.chat.id);
   const payload = session.payload as { draftBlockStart?: string; draftBlockEnd?: string };
-  const reason = msg.text?.trim();
-  const effectiveReason = reason && reason !== "رد" ? reason : null;
+  await saveBlockedTime(ctx, chatId, session, payload.draftBlockStart!, payload.draftBlockEnd!, msg.text?.trim() || null);
+}
 
+export async function handleBlockNoReasonCallback(
+  ctx: BotContext,
+  query: TelegramCallbackQuery,
+  session: Session
+): Promise<void> {
+  const chatId = String(query.message!.chat.id);
+  const payload = session.payload as { draftBlockStart?: string; draftBlockEnd?: string };
+  await saveBlockedTime(ctx, chatId, session, payload.draftBlockStart!, payload.draftBlockEnd!, null);
+}
+
+async function saveBlockedTime(
+  ctx: BotContext,
+  chatId: string,
+  session: Session,
+  startIso: string,
+  endIso: string,
+  reason: string | null
+): Promise<void> {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
   await prisma.blockedTime.create({
-    data: {
-      hairdresserId: session.hairdresserId!,
-      startsAt: new Date(payload.draftBlockStart!),
-      endsAt: new Date(payload.draftBlockEnd!),
-      reason: effectiveReason,
-    },
+    data: { hairdresserId: session.hairdresserId!, startsAt: start, endsAt: end, reason },
   });
-
   await updateSession(chatId, HairdresserState.IDLE, {});
-  await sendMessage(ctx, chatId, "✅ زمان مسدود شد!");
+  await sendMessage(
+    ctx,
+    chatId,
+    `✅ زمان مسدود شد!\n${formatJalaliDateTime(start)} تا ${formatJalaliDateTime(end)}`,
+    { reply_markup: makeHairdresserReplyMenu() }
+  );
 }
 
 function minutesToTime(m: number): string {

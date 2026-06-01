@@ -1,10 +1,10 @@
 import { prisma } from "@/lib/prisma";
-import { sendMessage, makeInlineKeyboard } from "@/bot/telegram/client";
+import { sendMessage, makeInlineKeyboard, makeCustomerReplyMenu } from "@/bot/telegram/client";
 import { notifyHairdresser, notifyCustomer } from "@/bot/notify";
 import { updateSession, mergeSessionPayload, linkCustomerToSession } from "@/bot/session";
 import { CustomerState } from "@/bot/states";
 import { getAvailableDates, getAvailableSlots, isSlotAvailable, getConflictingPendingBookings } from "@/domain/availability";
-import { addMinutes, formatTehranDateTime } from "@/lib/time";
+import { addMinutes, formatJalaliDateTime, gregorianToJalaliFull, gregorianToJalali, gregorianToJalaliWithDayName } from "@/lib/time";
 import { BookingStatus, BookingAttachmentType } from "@prisma/client";
 import type { BotContext } from "@/bot/telegram/client";
 import type { Session } from "@/bot/session";
@@ -147,7 +147,7 @@ export async function handleCustomerServiceCallback(
     return;
   }
 
-  const rows = dates.slice(0, 14).map((d) => [{ text: d, data: `cust:date:${d}` }]);
+  const rows = dates.slice(0, 14).map((d) => [{ text: gregorianToJalaliWithDayName(d), data: `cust:date:${d}` }]);
   await sendMessage(ctx, chatId, `سرویس «${service.title}» انتخاب شد.\nتاریخ مورد نظرت رو انتخاب کن:`, {
     reply_markup: makeInlineKeyboard(rows),
   });
@@ -186,7 +186,7 @@ export async function handleCustomerDateCallback(
     );
   }
 
-  await sendMessage(ctx, chatId, `تاریخ ${date} انتخاب شد.\nساعت مورد نظرت رو انتخاب کن:`, {
+  await sendMessage(ctx, chatId, `تاریخ ${gregorianToJalali(date)} انتخاب شد.\nساعت مورد نظرت رو انتخاب کن:`, {
     reply_markup: makeInlineKeyboard(rows),
   });
 }
@@ -220,7 +220,7 @@ export async function handleCustomerSlotCallback(
   await sendMessage(
     ctx,
     chatId,
-    `ساعت ${formatTehranDateTime(startAt)} انتخاب شد.\n\nاگه توضیح، عکس یا ویدیو داری بفرست.\n\n(اختیاریه)`,
+    `ساعت ${formatJalaliDateTime(startAt)} انتخاب شد.\n\nاگه توضیح، عکس یا ویدیو داری بفرست.\n\n(اختیاریه)`,
     {
       reply_markup: makeInlineKeyboard([
         [{ text: "رد شدن از این قسمت", data: "cust:description:skip" }],
@@ -326,7 +326,7 @@ async function showBookingReview(ctx: BotContext, chatId: string, session: Sessi
     "",
     `👤 آرایشگر: ${hairdresser.fullName}`,
     `✂️ سرویس: ${service.title}`,
-    `🕐 زمان: ${formatTehranDateTime(startAt)} تا ${formatTehranDateTime(endAt)}`,
+    `🕐 زمان: ${formatJalaliDateTime(startAt)} تا ${formatJalaliDateTime(endAt)}`,
     `💰 بازه قیمت: ${service.priceMinToman.toLocaleString()} - ${service.priceMaxToman.toLocaleString()} تومان`,
   ];
 
@@ -381,19 +381,30 @@ export async function handleCustomerBookingSubmit(
   }
 
   const isAutoApproved = hairdresser.autoApproveBookings;
+  const autoDeposit = hairdresser.autoApproveDeposit ?? 0;
+  const needsDeposit = isAutoApproved && autoDeposit > 0;
+
+  const bookingStatus = isAutoApproved && !needsDeposit
+    ? BookingStatus.CONFIRMED
+    : isAutoApproved && needsDeposit
+      ? BookingStatus.APPROVED_AWAITING_DEPOSIT
+      : BookingStatus.PENDING_REVIEW;
 
   const booking = await prisma.booking.create({
     data: {
       hairdresserId: payload.targetHairdresserId!,
       customerId: session.customerId!,
       serviceId: service.id,
-      status: isAutoApproved ? BookingStatus.CONFIRMED : BookingStatus.PENDING_REVIEW,
+      status: bookingStatus,
       requestedStartAt: startAt,
       requestedEndAt: endAt,
       customerDescription: payload.descriptionText ?? null,
       isAutoApproved,
+      quotedMinPriceToman: isAutoApproved ? service.priceMinToman : null,
+      quotedMaxPriceToman: isAutoApproved ? service.priceMaxToman : null,
+      depositAmountToman: needsDeposit ? autoDeposit : null,
       approvedAt: isAutoApproved ? new Date() : null,
-      confirmedAt: isAutoApproved ? new Date() : null,
+      confirmedAt: bookingStatus === BookingStatus.CONFIRMED ? new Date() : null,
     },
   });
 
@@ -414,22 +425,42 @@ export async function handleCustomerBookingSubmit(
 
   await updateSession(chatId, CustomerState.IDLE, {});
 
-  if (isAutoApproved) {
-    // Auto-reject all competing bookings for the same slot now that it's CONFIRMED
+  if (isAutoApproved && !needsDeposit) {
+    // Auto-approve بدون بیعانه: مستقیم CONFIRMED
     await rejectConflictingBookings(hairdresser.id, startAt, endAt, booking.id);
 
     await sendMessage(
       ctx,
       chatId,
-      `✅ نوبتت ثبت شد!\n\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(startAt)}`
+      `✅ نوبتت ثبت شد!\n\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatJalaliDateTime(startAt)}`,
+      { reply_markup: makeCustomerReplyMenu() }
     );
     const customer = await prisma.customer.findUnique({ where: { id: session.customerId! } });
     await notifyHairdresser(
       hairdresser,
-      `✅ نوبت جدید (تایید خودکار)\n\n👤 مشتری: ${customer?.fullName ?? "—"}\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(startAt)}`
+      `✅ نوبت جدید (تایید خودکار)\n\n👤 مشتری: ${customer?.fullName ?? "—"}\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatJalaliDateTime(startAt)}`
+    );
+  } else if (needsDeposit) {
+    // Auto-approve با بیعانه: نیاز به پرداخت
+    await sendMessage(
+      ctx,
+      chatId,
+      `✅ رزروت تایید شد!\n\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatJalaliDateTime(startAt)}\n💰 قیمت حدودی: ${service.priceMinToman.toLocaleString()} - ${service.priceMaxToman.toLocaleString()} تومان\n\nبرای نهایی شدن، بیعانه <b>${autoDeposit.toLocaleString()} تومان</b> رو پرداخت کن:`,
+      {
+        reply_markup: {
+          inline_keyboard: [[{ text: "💳 پرداخت بیعانه", callback_data: `cust:payment:pay:${booking.id}` }]],
+        },
+      }
+    );
+    const customer = await prisma.customer.findUnique({ where: { id: session.customerId! } });
+    await notifyHairdresser(
+      hairdresser,
+      `✅ نوبت جدید (تایید خودکار — منتظر پرداخت)\n\n👤 مشتری: ${customer?.fullName ?? "—"}\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatJalaliDateTime(startAt)}\n💰 بیعانه: ${autoDeposit.toLocaleString()} تومان`
     );
   } else {
-    await sendMessage(ctx, chatId, "✅ درخواست رزروت ثبت شد!\n\nمنتظر تایید آرایشگر باش. بعد از تایید پیام می‌گیری.");
+    await sendMessage(ctx, chatId, "✅ درخواست رزروت ثبت شد!\n\nمنتظر تایید آرایشگر باش. بعد از تایید پیام می‌گیری.", {
+      reply_markup: makeCustomerReplyMenu(),
+    });
     await notifyHairdresserNewBooking(ctx, booking.id);
   }
 }
@@ -437,7 +468,7 @@ export async function handleCustomerBookingSubmit(
 async function notifyHairdresserNewBooking(_ctx: BotContext, bookingId: string): Promise<void> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    include: { hairdresser: true, customer: true, service: true },
+    include: { hairdresser: true, customer: true, service: true, attachments: true },
   });
   if (!booking) return;
 
@@ -446,19 +477,23 @@ async function notifyHairdresserNewBooking(_ctx: BotContext, bookingId: string):
     "",
     `👤 مشتری: ${booking.customer.fullName}`,
     `✂️ سرویس: ${booking.service.title}`,
-    `🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`,
+    `🕐 زمان: ${formatJalaliDateTime(booking.requestedStartAt)}`,
   ];
   if (booking.customerDescription) lines.push(`📝 توضیحات: ${booking.customerDescription}`);
+  if (booking.attachments.length > 0) lines.push(`📎 فایل‌های پیوست: ${booking.attachments.length}`);
+
+  const inlineKeyboard: Array<Array<{ text: string; callback_data: string }>> = [
+    [
+      { text: "✅ تایید", callback_data: `hd:booking:approve:${bookingId}` },
+      { text: "❌ رد", callback_data: `hd:booking:reject:${bookingId}` },
+    ],
+  ];
+  if (booking.attachments.length > 0) {
+    inlineKeyboard.push([{ text: "📎 مشاهده فایل‌ها", callback_data: `hd:booking:attachments:${bookingId}` }]);
+  }
 
   await notifyHairdresser(booking.hairdresser, lines.join("\n"), {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "✅ تایید", callback_data: `hd:booking:approve:${bookingId}` },
-          { text: "❌ رد", callback_data: `hd:booking:reject:${bookingId}` },
-        ],
-      ],
-    },
+    reply_markup: { inline_keyboard: inlineKeyboard },
   });
 }
 

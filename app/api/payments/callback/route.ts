@@ -49,15 +49,19 @@ async function notifyPaymentSuccess(intentId: string): Promise<void> {
   const { booking } = intent;
   const { customer, hairdresser, service } = booking;
 
-  await sendMessage(TELEGRAM_CTX,
-    customer.telegramChatId,
-    `✅ پرداخت موفق!\n\nنوبتت ثبت شد 🎉\n\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`
-  );
+  if (customer.telegramChatId) {
+    await sendMessage(TELEGRAM_CTX,
+      customer.telegramChatId,
+      `✅ پرداخت موفق!\n\nنوبتت ثبت شد 🎉\n\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`
+    );
+  }
 
-  await sendMessage(TELEGRAM_CTX,
-    hairdresser.telegramChatId,
-    `✅ پرداخت انجام شد!\n\nنوبت ثبت شد:\n👤 مشتری: ${customer.fullName}\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`
-  );
+  if (hairdresser.telegramChatId) {
+    await sendMessage(TELEGRAM_CTX,
+      hairdresser.telegramChatId,
+      `✅ پرداخت انجام شد!\n\nنوبت ثبت شد:\n👤 مشتری: ${customer.fullName}\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`
+    );
+  }
 }
 
 async function notifyPaymentFailed(intentId: string): Promise<void> {
@@ -67,6 +71,7 @@ async function notifyPaymentFailed(intentId: string): Promise<void> {
   });
   if (!intent) return;
 
+  if (!intent.booking.customer.telegramChatId) return;
   await sendMessage(TELEGRAM_CTX,
     intent.booking.customer.telegramChatId,
     `❌ پرداخت ناموفق بود.\n\nمی‌تونی دوباره امتحان کنی:`,

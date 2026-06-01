@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { addMinutes } from "@/lib/time";
-import { ConversationActorType } from "@prisma/client";
+import { ConversationActorType, Prisma } from "@prisma/client";
 import { HairdresserState, CustomerState } from "./states";
 import type { BotPlatform } from "./telegram/client";
 
@@ -115,7 +115,7 @@ export async function updateSession(
     where: { telegramChatId },
     data: {
       state,
-      ...(payload !== undefined ? { payload } : {}),
+      ...(payload !== undefined ? { payload: payload as Prisma.InputJsonValue } : {}),
       expiresAt,
       lastInteractionAt: now,
     },
@@ -133,7 +133,7 @@ export async function mergeSessionPayload(
   const current = (session.payload as Record<string, unknown>) ?? {};
   await prisma.conversationSession.update({
     where: { telegramChatId },
-    data: { payload: { ...current, ...partialPayload } },
+    data: { payload: { ...current, ...partialPayload } as Prisma.InputJsonValue },
   });
 }
 

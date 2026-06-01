@@ -30,8 +30,14 @@
   - انتظار برای حداقل قیمت
 - `HD_WAIT_FIRST_SERVICE_PRICE_MAX`
   - انتظار برای حداکثر قیمت
+- `HD_WAIT_ONBOARDING_HOURS_CONFIRM`
+  - انتظار برای تأیید/رد کار در یک روز خاص (دکمه بله/تعطیله)
+- `HD_WAIT_ONBOARDING_HOURS_START`
+  - انتظار برای ساعت شروع کار آن روز
+- `HD_WAIT_ONBOARDING_HOURS_END`
+  - انتظار برای ساعت پایان کار آن روز
 - `HD_ONBOARDING_DONE`
-  - حالت انتقالی برای نمایش لینک اختصاصی و منوی اصلی
+  - حالت انتقالی برای نمایش لینک اختصاصی و منوی اصلی (بعد از تکمیل ساعت کاری)
 
 ## Service Management
 
@@ -57,6 +63,13 @@
 - `HD_WAIT_BLOCK_END`
 - `HD_WAIT_BLOCK_REASON`
 
+## Wallet (Hairdresser)
+
+- `HD_WAIT_WITHDRAWAL_AMOUNT` — انتظار برای مبلغ درخواست برداشت
+- `HD_WAIT_WITHDRAWAL_IBAN` — انتظار برای شماره شبا
+- `HD_WAIT_WITHDRAWAL_NAME` — انتظار برای نام صاحب حساب
+- `HD_WAIT_AUTO_APPROVE_DEPOSIT` — انتظار برای مبلغ بیعانه ثابت تایید خودکار
+
 ## Customer States
 
 - `CUST_IDLE`
@@ -70,6 +83,9 @@
 - `CUST_REQUEST_SUBMITTED`
 - `CUST_WAIT_PAYMENT`
 - `CUST_WAIT_CANCELLATION_CONFIRM`
+- `CUST_WAIT_WITHDRAWAL_AMOUNT` — انتظار برای مبلغ درخواست برداشت
+- `CUST_WAIT_WITHDRAWAL_IBAN` — انتظار برای شماره شبا
+- `CUST_WAIT_WITHDRAWAL_NAME` — انتظار برای نام صاحب حساب
 
 ## Transition Rules
 
@@ -83,7 +99,13 @@
 - بعد از دریافت نام:
   - `HD_WAIT_NAME -> HD_WAIT_FIRST_CATEGORY`
 - بعد از تکمیل اولین سرویس:
-  - `HD_WAIT_FIRST_SERVICE_PRICE_MAX -> HD_ONBOARDING_DONE -> HD_IDLE`
+  - `HD_WAIT_FIRST_SERVICE_PRICE_MAX -> HD_WAIT_ONBOARDING_HOURS_CONFIRM`
+- برای هر روز هفته (از شنبه تا جمعه):
+  - دکمه «بله»: `HD_WAIT_ONBOARDING_HOURS_CONFIRM -> HD_WAIT_ONBOARDING_HOURS_START -> HD_WAIT_ONBOARDING_HOURS_END -> HD_WAIT_ONBOARDING_HOURS_CONFIRM` (روز بعد)
+  - دکمه «تعطیله»: `HD_WAIT_ONBOARDING_HOURS_CONFIRM` (روز بعد)
+- بعد از تکمیل همه روزها:
+  - `HD_WAIT_ONBOARDING_HOURS_CONFIRM -> HD_ONBOARDING_DONE -> HD_IDLE`
+  - اثر بک‌اند: `isOnboardingCompleted = true`
 
 ### Customer Booking
 
@@ -134,15 +156,30 @@
 - `hd:booking:approve:<bookingId>`
 - `hd:booking:reject:<bookingId>`
 - `hd:booking:view:<bookingId>`
+- `hd:booking:attachments:<bookingId>` — نمایش توضیحات و فایل‌های پیوست مشتری (ظاهر می‌شود اگر رزرو توضیح یا فایل داشته باشد)
 
-### ساعت کاری
+### ساعت کاری — onboarding
+
+- `hd:onboarding:hours:yes:<iranDayIndex>` — آرایشگر تأیید کرد که این روز کار می‌کند
+- `hd:onboarding:hours:skip:<iranDayIndex>` — آرایشگر این روز را تعطیل اعلام کرد
+- `<iranDayIndex>`: ایندکس ایرانی روز (`0=شنبه … 6=جمعه`)
+
+### ساعت کاری — تنظیمات
 
 - `hd:hours:edit`
-- `hd:hours:day:<dayIndex>`
+- `hd:hours:day:<jsDay>` — `<jsDay>`: مقدار JS day ذخیره‌شده در DB (`6=شنبه، 0=یکشنبه، …`)
 
 ### زمان مسدود
 
 - `hd:block:add`
+- `hd:block:noreason` — ثبت بازه مسدود بدون دلیل
+
+### کیف پول آرایشگر
+
+- `hd:wallet:show` — نمایش موجودی کل، قفل‌شده، قابل برداشت + تاریخچه
+- `hd:wallet:withdraw` — شروع فلوی درخواست برداشت
+- `hd:settings:autoapprove:deposit` — تنظیم بیعانه ثابت تایید خودکار
+- `hd:cancel` — لغو فلوی جاری (برداشت و غیره) و بازگشت به منو
 
 ### تنظیمات پیشرفته
 
@@ -166,6 +203,41 @@
 - `cust:cancel:request:<bookingId>`
 - `cust:cancel:confirm:<bookingId>`
 - `cust:cancel:abort:<bookingId>`
+- `cust:wallet:show` — نمایش کیف پول
+- `cust:wallet:withdraw` — شروع فلوی درخواست برداشت
+- `cust:wallet:cancel` — لغو فلوی برداشت
+
+## Reply Keyboard Menus
+
+### منوی آرایشگر (persistent)
+
+منوی reply keyboard آرایشگر در پایین صفحه **همیشه** نمایش داده می‌شود (`is_persistent: true`):
+
+```
+[📅 نوبت‌های امروز]  [📆 نوبت‌های آینده]
+[👥 مشتریان]         [➕ سرویس جدید]
+[⚙️ تنظیمات]        [💰 کیف پول]
+```
+
+- `📅 نوبت‌های امروز` — رزروهای امروز با علامت 📎 برای رزروهایی که فایل/توضیح دارند
+- `📆 نوبت‌های آینده` — رزروهای از فردا به بعد، گروه‌بندی‌شده بر اساس تاریخ (حداکثر ۳۰ نوبت)
+- `👥 مشتریان`
+- `➕ سرویس جدید`
+- `⚙️ تنظیمات`
+- `💰 کیف پول`
+
+### منوی مشتری (persistent)
+
+منوی reply keyboard مشتری بعد از اولین بار ورود نمایش داده می‌شود (`is_persistent: true`):
+
+- `📋 رزروهای من` — نمایش رزروهای فعال
+- `💰 کیف پول` — نمایش موجودی و درخواست برداشت
+
+## دستورهای ویژه
+
+- `/start` — شروع برای آرایشگر (onboarding) یا redirect برای مشتری از deep link
+- `/menu` — نمایش منوی اصلی آرایشگر
+- `/resetdb` — حذف شده؛ از اسکریپت `npm run db:reset` در ترمینال استفاده کنید
 
 ## Timeout And Resume Behavior
 
@@ -187,8 +259,8 @@
 - `durationMinutes` باید مضرب 30 باشد
 - `priceMinToman` و `priceMaxToman` باید integer مثبت باشند
 - `priceMinToman <= priceMaxToman`
-- `depositAmountToman > 0` (فقط در تایید دستی)
-- `depositAmountToman <= quotedMaxPriceToman` (فقط در تایید دستی)
+- `depositAmountToman >= 0` (فقط در تایید دستی؛ 0 یعنی بدون بیعانه → رزرو مستقیم CONFIRMED)
+- `depositAmountToman <= quotedMaxPriceToman` (فقط در تایید دستی، وقتی > 0)
 - slot باید در آینده باشد
 - slot باید داخل افق 14 روز آینده باشد
 - حداکثر تعداد attachment در MVP برابر `5` فایل است
@@ -247,10 +319,14 @@
   - `draftQuoteMaxToman`
   - `targetBookingId`
   - `targetCategoryId`
-  - `draftWorkingDay`
+  - `draftWorkingDay` — JS day (`6=شنبه`)
   - `draftWorkingStart`
   - `draftBlockStart`
   - `draftBlockEnd`
+  - `onboardingIranDayIndex` — ایندکس ایرانی روز جاری در onboarding (`0=شنبه … 6=جمعه`)
+  - `onboardingHourStart` — ساعت شروع روز جاری (دقیقه از ابتدای شبانه‌روز)
+  - `withdrawalAmount` — مبلغ درخواست برداشت
+  - `withdrawalIban` — شماره شبا
 - برای مشتری:
   - `targetHairdresserId`
   - `targetHairdresserSlug`
@@ -260,10 +336,13 @@
   - `selectedStartAt`
   - `descriptionText`
   - `attachmentIds`
+  - `withdrawalAmount` — مبلغ درخواست برداشت
+  - `withdrawalIban` — شماره شبا
 
 ## Acceptance Scenarios
 
-- آرایشگر onboarding را بدون خروج از بات کامل کند
+- آرایشگر onboarding را بدون خروج از بات کامل کند، شامل تنظیم ساعت کاری هر روز هفته
+- لیست روزهای هفته در بات از شنبه شروع شود
 - آرایشگری که قبلاً روی تلگرام ثبت‌نام کرده، روی بله `/start` بزند و همان حساب را ببیند
 - مشتری از deep link تا submit booking را بدون تایپ اجباری جلو ببرد
 - دو مشتری همزمان یک اسلات را درخواست دهند؛ هر دو `PENDING_REVIEW` بگیرند
