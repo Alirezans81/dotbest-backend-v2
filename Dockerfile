@@ -1,5 +1,5 @@
 # ---------- Build stage ----------
-FROM docker.arvancloud.ir/ghcr.io/pnpm/pnpm:9 AS builder
+FROM docker.arvancloud.ir/node:20 AS builder
 
 WORKDIR /app
 
@@ -7,6 +7,7 @@ WORKDIR /app
 ARG HTTP_PROXY="http://host.docker.internal:10809"
 ARG HTTPS_PROXY="http://host.docker.internal:10809"
 
+RUN npm install -g pnpm@9
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm config set registry https://package-mirror.liara.ir/repository/npm/ --global
 RUN pnpm install --frozen-lockfile --ignore-scripts
@@ -25,10 +26,12 @@ RUN HTTP_PROXY=${HTTP_PROXY} \
 RUN pnpm build
 
 # ---------- Runtime stage ----------
-FROM docker.arvancloud.ir/ghcr.io/pnpm/pnpm:9 AS runner
+FROM docker.arvancloud.ir/node:20 AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
+
+RUN npm install -g pnpm@9
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
