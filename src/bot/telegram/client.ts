@@ -39,7 +39,14 @@ async function callBotApi(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await res.json() as { ok: boolean; result?: unknown; description?: string };
+  const rawText = await res.text();
+  let data: { ok: boolean; result?: unknown; description?: string };
+  try {
+    data = JSON.parse(rawText) as { ok: boolean; result?: unknown; description?: string };
+  } catch {
+    console.error(`[${platform}] ${method} raw response (status ${res.status}):`, rawText.slice(0, 300));
+    return undefined;
+  }
   if (!data.ok) {
     console.error(`[${platform}] ${method} failed:`, data.description);
   }

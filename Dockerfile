@@ -30,4 +30,4 @@ COPY --from=builder /app/prisma ./prisma
 
 EXPOSE 3000
 # Run migrations at container startup, then launch the app
-CMD ["sh", "-c", "pnpm prisma migrate deploy && pnpm start"]
+CMD ["sh", "-c", "pnpm db:push && pnpm start"]

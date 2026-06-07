@@ -16,14 +16,24 @@ function isDuplicate(updateId: number): boolean {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const secret = req.headers.get("x-bale-bot-api-secret-token");
-  if (secret !== process.env.BALE_WEBHOOK_SECRET) {
+  // Bale does not support secret_token header; use query param instead.
+  // Register webhook as: .../api/bale/webhook?secret=<BALE_WEBHOOK_SECRET>
+  const secret = req.nextUrl.searchParams.get("secret");
+  if (!process.env.BALE_WEBHOOK_SECRET || secret !== process.env.BALE_WEBHOOK_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   let update: TelegramUpdate;
   try {
-    update = await req.json() as TelegramUpdate;
+    const contentType = req.headers.get("content-type") ?? "";
+    const rawText = await req.text();
+    if (contentType.includes("application/x-www-form-urlencoded")) {
+      const params = new URLSearchParams(rawText);
+      const raw = params.get("update") ?? rawText;
+      update = JSON.parse(raw) as TelegramUpdate;
+    } else {
+      update = JSON.parse(rawText) as TelegramUpdate;
+    }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
