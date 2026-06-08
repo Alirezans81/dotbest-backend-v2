@@ -79,6 +79,7 @@
 
 - آرایشگر بتواند حداقل یک دسته‌بندی و یک سرویس بسازد
 - لینک رزرو یکتا برای هر آرایشگر تولید شود
+- لینک برای پلتفرم تلگرام با فرمت `https://t.me/...` و برای بله با فرمت `https://ble.ir/...` باشد
 
 ## Phase 4: Customer Booking Request Flow
 
@@ -223,7 +224,7 @@
 - لیست مشتری‌های فعال
 - entrypointهای تنظیمات
 - callback `hd:settings:autoapprove:toggle`
-- callbackهای `hd:settings:notif:menu` و `hd:settings:notif:set:<channel>`
+- callbackهای `hd:settings:notif:menu` و `hd:settings:notif:<channel>`
 
 ### done criteria
 
@@ -232,7 +233,7 @@
 - در هر دو صفحه، رزروهایی که فایل/توضیح دارند با علامت 📎 مشخص باشند و دکمه مشاهده داشته باشند
 - بتواند سابقه ساده هر مشتری را مشاهده کند
 - بتواند تایید خودکار را روشن/خاموش کند
-- بتواند کانال دریافت نوتیف را انتخاب کند
+- بتواند کانال دریافت نوتیف را انتخاب کند — با چک پلتفرم قبل از ذخیره: اگر chatId پلتفرم انتخابی موجود نباشد، لینک استارت آن ربات نمایش داده شود
 
 ## Phase 9: Hardening, Observability, And Admin Safeguards
 

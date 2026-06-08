@@ -185,9 +185,9 @@
 
 - `hd:settings:autoapprove:toggle` — روشن/خاموش کردن تایید خودکار
 - `hd:settings:notif:menu` — نمایش منوی انتخاب کانال نوتیف
-- `hd:settings:notif:set:TELEGRAM_ONLY` — فقط تلگرام
-- `hd:settings:notif:set:BALE_ONLY` — فقط بله
-- `hd:settings:notif:set:BOTH` — هر دو
+- `hd:settings:notif:TELEGRAM_ONLY` — فقط تلگرام
+- `hd:settings:notif:BALE_ONLY` — فقط بله
+- `hd:settings:notif:BOTH` — هر دو
 
 ## Callbackهای مشتری
 
@@ -266,6 +266,7 @@
 - حداکثر تعداد attachment در MVP برابر `5` فایل است
 - فقط `photo` و `video` به عنوان media attachment پذیرفته می‌شوند
 - `NotificationChannel` باید یکی از مقادیر enum معتبر باشد
+- قبل از ذخیره `NotificationChannel`، `chatId` پلتفرم(های) انتخابی باید موجود باشد؛ در غیر این صورت لینک استارت ربات آن پلتفرم به آرایشگر نمایش داده می‌شود تا ابتدا آنجا `/start` بزند
 
 ## Failure And Recovery Paths
 

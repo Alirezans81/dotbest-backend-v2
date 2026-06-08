@@ -32,7 +32,7 @@
 - `isOnboardingCompleted`
 - `autoApproveBookings` — پیش‌فرض `false`
 - `autoApproveDeposit` — nullable؛ اگر مقدار داشته باشد، رزروهای خودکار نیاز به پرداخت این مبلغ دارند
-- `notificationChannel` — پیش‌فرض `TELEGRAM_ONLY`
+- `notificationChannel` — پیش‌فرض بر اساس پلتفرم ثبت‌نام: `BALE_ONLY` اگر از بله، `TELEGRAM_ONLY` اگر از تلگرام
 - `createdAt`
 - `updatedAt`
 
@@ -592,6 +592,7 @@ state گفت‌وگو در تلگرام یا بله برای هر actor.
 - `BALE_ONLY`: فقط به `baleChatId` پیام می‌رود
 - `BOTH`: به هر دو به‌صورت موازی پیام می‌رود
 - اگر chatId پلتفرم ترجیحی خالی باشد، به پلتفرم دیگر fallback می‌کند
+- **تغییر کانال:** قبل از ذخیره، سیستم بررسی می‌کند که `chatId` پلتفرم(های) انتخابی موجود باشد؛ اگر نباشد، لینک استارت ربات آن پلتفرم + راهنما به آرایشگر نمایش داده می‌شود
 
 ## نکات پیاده‌سازی Prisma
 

@@ -8,6 +8,7 @@ import { updateSession, mergeSessionPayload, linkHairdresserToSession } from "@/
 import { HairdresserState } from "@/bot/states";
 import type { BotContext } from "@/bot/telegram/client";
 import type { Session } from "@/bot/session";
+import { NotificationChannel } from "@prisma/client";
 import type { TelegramMessage, TelegramCallbackQuery } from "@/bot/telegram/types";
 
 export async function handleHairdresserStart(
@@ -105,7 +106,13 @@ export async function handleHairdresserName(
         : { telegramUserId: userId, telegramChatId: chatId };
 
     hairdresser = await prisma.hairdresser.create({
-      data: { ...createData, fullName: name, phoneNumber: phone, bookingSlug: generateBookingSlug() },
+      data: {
+        ...createData,
+        fullName: name,
+        phoneNumber: phone,
+        bookingSlug: generateBookingSlug(),
+        notificationChannel: ctx.platform === "BALE" ? NotificationChannel.BALE_ONLY : NotificationChannel.TELEGRAM_ONLY,
+      },
     });
   } else {
     const updateData =
@@ -406,10 +413,12 @@ async function advanceOnboardingDay(
     where: { id: payload.hairdresserId! },
   });
 
-  const botUsername = ctx.platform === "BALE"
+  const isBale = ctx.platform === "BALE";
+  const botUsername = isBale
     ? process.env.BALE_BOT_USERNAME!
     : process.env.TELEGRAM_BOT_USERNAME!;
-  const deepLink = `https://t.me/${botUsername}?start=hd_${hairdresser!.bookingSlug}`;
+  const baseUrl = isBale ? "https://ble.ir" : "https://t.me";
+  const deepLink = `${baseUrl}/${botUsername}?start=hd_${hairdresser!.bookingSlug}`;
 
   await updateSession(chatId, HairdresserState.IDLE, {});
   await sendMessage(

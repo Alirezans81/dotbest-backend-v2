@@ -317,9 +317,9 @@ export async function handleNotifMenu(
 
   await sendMessage(ctx, chatId, "📱 نوتیف‌هات رو از کجا دریافت کنی؟", {
     reply_markup: makeInlineKeyboard([
-      [{ text: "فقط تلگرام", data: "hd:settings:notif:set:TELEGRAM_ONLY" }],
-      [{ text: "فقط بله", data: "hd:settings:notif:set:BALE_ONLY" }],
-      [{ text: "هر دو (تلگرام + بله)", data: "hd:settings:notif:set:BOTH" }],
+      [{ text: "فقط تلگرام", data: "hd:settings:notif:TELEGRAM_ONLY" }],
+      [{ text: "فقط بله", data: "hd:settings:notif:BALE_ONLY" }],
+      [{ text: "هر دو (تلگرام + بله)", data: "hd:settings:notif:BOTH" }],
     ]),
   });
 }
@@ -334,6 +334,31 @@ export async function handleNotifSet(
   const validChannels = Object.values(NotificationChannel) as string[];
   if (!validChannels.includes(channel)) {
     await sendMessage(ctx, chatId, "مقدار نامعتبر.");
+    return;
+  }
+
+  const hairdresser = await prisma.hairdresser.findUnique({ where: { id: session.hairdresserId! } });
+  if (!hairdresser) return;
+
+  const needsTelegram = channel === NotificationChannel.TELEGRAM_ONLY || channel === NotificationChannel.BOTH;
+  const needsBale = channel === NotificationChannel.BALE_ONLY || channel === NotificationChannel.BOTH;
+  const missingTelegram = needsTelegram && !hairdresser.telegramChatId;
+  const missingBale = needsBale && !hairdresser.baleChatId;
+
+  if (missingTelegram || missingBale) {
+    const lines: string[] = ["برای فعال کردن این گزینه، ابتدا باید توی پلتفرم‌های موردنظر ربات رو استارت کنی:\n"];
+
+    if (missingTelegram) {
+      const tgLink = `https://t.me/${process.env.TELEGRAM_BOT_USERNAME}`;
+      lines.push(`📩 تلگرام: ${tgLink}`);
+    }
+    if (missingBale) {
+      const baleLink = `https://ble.ir/${process.env.BALE_BOT_USERNAME}`;
+      lines.push(`📩 بله: ${baleLink}`);
+    }
+
+    lines.push("\nبعد از زدن /start توی اون پلتفرم، برگرد به تنظیمات و دوباره گزینه مورد نظرت رو انتخاب کن.");
+    await sendMessage(ctx, chatId, lines.join("\n"));
     return;
   }
 
