@@ -8,10 +8,11 @@
     "start": "next start",
     "lint": "next lint",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force && prisma db push"
+    "db:reset": "prisma migrate reset --force"
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
