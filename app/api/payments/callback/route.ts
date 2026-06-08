@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyPayment } from "@/domain/payment";
 import { prisma } from "@/lib/prisma";
-import { sendMessage, type BotContext } from "@/bot/telegram/client";
+import { notifyCustomer, notifyHairdresser } from "@/bot/notify";
 import { formatTehranDateTime } from "@/lib/time";
-
-const TELEGRAM_CTX: BotContext = { platform: "TELEGRAM" };
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(req.url);
@@ -49,19 +47,16 @@ async function notifyPaymentSuccess(intentId: string): Promise<void> {
   const { booking } = intent;
   const { customer, hairdresser, service } = booking;
 
-  if (customer.telegramChatId) {
-    await sendMessage(TELEGRAM_CTX,
-      customer.telegramChatId,
+  await Promise.allSettled([
+    notifyCustomer(
+      customer,
       `✅ پرداخت موفق!\n\nنوبتت ثبت شد 🎉\n\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`
-    );
-  }
-
-  if (hairdresser.telegramChatId) {
-    await sendMessage(TELEGRAM_CTX,
-      hairdresser.telegramChatId,
+    ),
+    notifyHairdresser(
+      hairdresser,
       `✅ پرداخت انجام شد!\n\nنوبت ثبت شد:\n👤 مشتری: ${customer.fullName}\n✂️ سرویس: ${service.title}\n🕐 زمان: ${formatTehranDateTime(booking.requestedStartAt)}`
-    );
-  }
+    ),
+  ]);
 }
 
 async function notifyPaymentFailed(intentId: string): Promise<void> {
@@ -71,9 +66,8 @@ async function notifyPaymentFailed(intentId: string): Promise<void> {
   });
   if (!intent) return;
 
-  if (!intent.booking.customer.telegramChatId) return;
-  await sendMessage(TELEGRAM_CTX,
-    intent.booking.customer.telegramChatId,
+  await notifyCustomer(
+    intent.booking.customer,
     `❌ پرداخت ناموفق بود.\n\nمی‌تونی دوباره امتحان کنی:`,
     {
       reply_markup: {
@@ -105,7 +99,7 @@ function htmlResponse(message: string, success: boolean): NextResponse {
   <div class="box">
     <h1>${icon}</h1>
     <p>${message}</p>
-    <p style="margin-top:20px; font-size:.9rem; color:#999;">می‌تونی این صفحه رو ببندی و به تلگرام برگردی.</p>
+    <p style="margin-top:20px; font-size:.9rem; color:#999;">می‌تونی این صفحه رو ببندی و به بله/تلگرام برگردی.</p>
   </div>
 </body>
 </html>`;

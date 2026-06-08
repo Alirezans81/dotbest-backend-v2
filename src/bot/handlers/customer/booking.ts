@@ -5,7 +5,7 @@ import { updateSession, mergeSessionPayload, linkCustomerToSession } from "@/bot
 import { CustomerState } from "@/bot/states";
 import { getAvailableDates, getAvailableSlots, isSlotAvailable, getConflictingPendingBookings } from "@/domain/availability";
 import { addMinutes, formatJalaliDateTime, gregorianToJalaliFull, gregorianToJalali, gregorianToJalaliWithDayName } from "@/lib/time";
-import { BookingStatus, BookingAttachmentType } from "@prisma/client";
+import { BookingStatus, BookingAttachmentType, NotificationChannel } from "@prisma/client";
 import type { BotContext } from "@/bot/telegram/client";
 import type { Session } from "@/bot/session";
 import type { TelegramMessage, TelegramCallbackQuery } from "@/bot/telegram/types";
@@ -42,6 +42,7 @@ export async function handleCustomerDeepLink(
         [chatIdField]: chatId,
         fullName: [from.first_name, from.last_name].filter(Boolean).join(" "),
         username: from.username ?? null,
+        notificationChannel: ctx.platform === "BALE" ? NotificationChannel.BALE_ONLY : NotificationChannel.TELEGRAM_ONLY,
       },
     });
   } else if (!customer[chatIdField as keyof typeof customer]) {

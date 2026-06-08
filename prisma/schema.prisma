@@ -20,7 +20,7 @@ model Hairdresser {
   isOnboardingCompleted Boolean             @default(false)
   autoApproveBookings   Boolean             @default(false)
   autoApproveDeposit    Int?
-  notificationChannel   NotificationChannel @default(TELEGRAM_ONLY)
+  notificationChannel   NotificationChannel
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
 
@@ -46,7 +46,7 @@ model Customer {
   fullName            String
   username            String?
   phoneNumber         String?             @unique
-  notificationChannel NotificationChannel @default(TELEGRAM_ONLY)
+  notificationChannel NotificationChannel
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
